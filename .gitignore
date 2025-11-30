@@ -1,0 +1,7 @@
+**/.lake
+*.egg-info
+dist/
+.mypy_cache/*
+.lake/*
+**/.github
+.DS_Store

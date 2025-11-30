@@ -1,0 +1,17 @@
+* Tasks
+** DONE Setup @[python] annotation
+CLOSED: [2025-11-29 Sat 00:39]
+** DONE Compile to shared library
+CLOSED: [2025-11-29 Sat 00:39]
+** DONE Make extern
+CLOSED: [2025-11-29 Sat 01:15]
+** DONE Load in python
+CLOSED: [2025-11-29 Sat 20:36]
+** DONE Add flag to export symbol
+CLOSED: [2025-11-29 Sat 20:36]
+
+-Wl,-rpath,@loader_path
+-Wl,-rpath,@loader_path/../lib
+** DONE Figure out why exports not working
+CLOSED: [2025-11-29 Sat 22:03]
+** TODO Figure out how to call function from python

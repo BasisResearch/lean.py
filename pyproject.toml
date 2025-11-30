@@ -1,0 +1,7 @@
+[project]
+name = "LeanPy"
+version = "0.1.0"
+description = "Python-Lean interop made easy."
+readme = "README.md"
+requires-python = ">=3.12.9"
+dependencies = []

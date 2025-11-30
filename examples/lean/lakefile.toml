@@ -1,0 +1,25 @@
+name = "PyleanExample"
+version = "0.1.0"
+defaultTargets = ["PyleanExample"]
+
+[[require]]
+name = "LeanPy"
+path = "../../"
+
+[[lean_lib]]
+name = "PyleanExample"
+libname = "PyLeanExample"
+moreLinkObjs = ["LeanPy/LeanPy:static"]
+precompileModules = true
+defaultFacets = ["shared"]
+moreLinkArgs = [
+  "-undefined", "dynamic_lookup",
+  "-Wl","-rpath", "/Users/kirang/.elan/toolchains/leanprover--lean4---v4.25.2/lib/lean"
+]
+
+
+
+[[lean_lib.facet.shared]]
+name = "shared"
+
+
