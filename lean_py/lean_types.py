@@ -10,13 +10,13 @@ Higher level types wrapping Lean objects.
 from ctypes import POINTER, addressof
 import ctypes
 from lean_py.base_types import LeanArrayObject, LeanStringObject
-from lean_py.lean_ffi import LeanFFI, lean_box
+from lean_py.lean_ffi import LeanFFI, get_lean_ffi
 
 
 class LeanValue:
     """Base class for Python-friendly Lean value wrappers."""
 
-    def __init__(self, ptr, ffi=None):
+    def __init__(self, ptr):
         """
         Initialize with a Lean object pointer.
         
@@ -25,11 +25,11 @@ class LeanValue:
             ffi: LeanFFI instance for managing the value
         """
         self.ptr = ptr
-        self.ffi : LeanFFI | None = ffi
+        self.ffi : LeanFFI = get_lean_ffi()
 
     def __del__(self):
         """Automatically decrement reference when Python object is garbage collected."""
-        if self.ffi and self.ptr:
+        if self.ptr:
             self.ffi.dec_ref(self.ptr)
 
 
@@ -71,9 +71,8 @@ class LeanArray(LeanValue):
             raise IndexError(f"Index {index} out of bounds for array of size {array_obj.m_size}")
         
         elem_ptr = array_obj.m_data[index]
-        if self.ffi:
-            self.ffi.inc_ref(elem_ptr)
-        return LeanValue(elem_ptr, self.ffi)
+        self.ffi.inc_ref(elem_ptr)
+        return LeanValue(elem_ptr)
 
     def to_python_list(self):
         """Convert to Python list."""
@@ -91,9 +90,7 @@ class LeanIOResult(LeanValue):
 
     def is_ok(self):
         """Check if result is Ok."""
-        if self.ffi:
-            return self.ffi.io_result_is_ok(self.ptr)
-        return self.ptr.contents.m_tag == 0
+        return self.ffi.io_result_is_ok(self.ptr)
 
     def is_error(self):
         """Check if result is Error."""
@@ -111,13 +108,11 @@ class LeanIOResult(LeanValue):
             result_obj = ctypes.cast(self.ptr, POINTER(LeanArrayObject)).contents
             if result_obj.m_size > 0:
                 val_ptr = result_obj.m_data[0]
-                if self.ffi:
-                    self.ffi.inc_ref(val_ptr)
-                return LeanValue(val_ptr, self.ffi)
-            return LeanValue(lean_box(0), self.ffi)
+                self.ffi.inc_ref(val_ptr)
+                return LeanValue(val_ptr)
+            return LeanValue(self.ffi.lean_box(0))
         else:
             # For Error, display and raise
-            if self.ffi:
-                self.ffi.io_result_show_error(self.ptr)
+            self.ffi.io_result_show_error(self.ptr)
             raise RuntimeError("Lean IO error occurred")
 

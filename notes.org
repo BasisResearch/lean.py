@@ -62,10 +62,21 @@ preserves functionality with lean.h, Use a stub helper function to
 create a tempfile and link into the Lean shared libs and compile and
 test equivalence/compatibility.
 
+** DONE Refactor into library
+CLOSED: [2025-12-01 Mon 00:03]
 ** TODO Write function exposed by leanpy that returns all the functions
-** TODO Refactor into library
 * Project structure
 `lean_py` contains the python implementation:
 - `base_types.py` - defines simple wrappers over the raw Ctypes objects
 - `lean_ffi.py` - implements python implementations of functions from `lean.h`, get the ffi object using `get_lean_ffi`
 - `lean_types.py` - implements higher level wrappers over these ctypes objects that are easier to deal with in python such as `LeanPy`
+- `library.py` - implements the wrapper around Lean Libraries.
+- `utils.py` - miscellaneous utility functions that are helpful for this task.
+* Development cycle
+- Currently I'm working on `library.py`. I make changes in that file,
+  add tests in `test/test_library.py` and run pytest
+  `test/test_library.py`.
+
+  The repl is a bit useful for prototyping things, but because
+  segfaults crash the python interpreter, test are easier to iterate
+  on.
