@@ -1,5 +1,5 @@
 [project]
-name = "LeanPy"
+name = "lean_py"
 version = "0.1.0"
 description = "Python-Lean interop made easy."
 readme = "README.md"

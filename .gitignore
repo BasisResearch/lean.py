@@ -5,3 +5,5 @@ dist/
 .lake/*
 **/.github
 .DS_Store
+refs/
+**/__pycache__/

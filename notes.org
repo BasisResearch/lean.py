@@ -14,4 +14,58 @@ CLOSED: [2025-11-29 Sat 20:36]
 -Wl,-rpath,@loader_path/../lib
 ** DONE Figure out why exports not working
 CLOSED: [2025-11-29 Sat 22:03]
-** TODO Figure out how to call function from python
+** DONE Figure out how to call function from python
+CLOSED: [2025-11-30 Sun 12:17]
+** DONE Figure out how to represent Result
+CLOSED: [2025-11-30 Sun 14:30]
+** DONE Write wrappers, extract result from py_foo and py_bar
+CLOSED: [2025-11-30 Sun 19:45]
+
+I am implementing a library that provides easy bindings for Lean in
+python.  The idea is that you wrap your lean definitions in `@[python
+"<name>"]` and then you can import the dll in python and using my
+library it should be easy to call (the library will handle wrapping
+ and unwrapping the ffi details).
+
+ See `examples/lean/PyLeanExample.lean` for what the lean side looks
+ like. I'm happy with this. Internally this so far this annotation is
+ equivalent to @[export].
+
+Inside `examples/python/main.py` I am working on a script to play
+around with calling these functions.
+
+So I'm thinking an interface where we do something like `LeanPy.Library("<path-to-dll>", "library-name")`.
+LeanPy.Library will:
+
+- load libleanshared from the lean path (see `main.py`), and clal
+  `lean_initialize`. It uses a global variable to track if lean has
+  been initialised and avoids reinitialising lean twice as this causes a segfault.
+
+- load the library `initialize_<libname>`, doing the usual rigamarole
+  around decreasing refs etc. the result is valid, otherwise throwing
+  an error
+  - see `refs/main.c` to see an example of what calling lean code from C looks like.
+
+- [at a later point], we'll configure the LeanPy lean library to store
+  all the symbols exported to python in a global registry and export a
+  function that returns a list of them with all their types, and then
+  the Library wrapper will call this function (always has a standard
+  name), and retrieve all the symbols and use the type information to
+  export these functions, maybe also generate stubs for like mypy
+  integration etc.
+
+For now, please refactor `main.py` to the library in `Lean_py` and implement the basic functionality.
+
+For each function/definition/type in `lean.h` please write a python
+implementation using ctypes. Add a test-suite that checks that this
+preserves functionality with lean.h, Use a stub helper function to
+create a tempfile and link into the Lean shared libs and compile and
+test equivalence/compatibility.
+
+** TODO Write function exposed by leanpy that returns all the functions
+** TODO Refactor into library
+* Project structure
+`lean_py` contains the python implementation:
+- `base_types.py` - defines simple wrappers over the raw Ctypes objects
+- `lean_ffi.py` - implements python implementations of functions from `lean.h`, get the ffi object using `get_lean_ffi`
+- `lean_types.py` - implements higher level wrappers over these ctypes objects that are easier to deal with in python such as `LeanPy`
