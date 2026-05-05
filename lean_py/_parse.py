@@ -100,22 +100,48 @@ def _preprocess(header_path: Path) -> Path:
     """Run cc -E and clean output for pycparser."""
     include_dir = header_path.parent.parent
 
+    # -D flags strip GCC/Clang constructs that pycparser can't handle
     result = subprocess.run(
-        ["cc", "-E", "-D__STDC_VERSION__=201112L", "-DNDEBUG",
-         f"-I{include_dir}", str(header_path)],
+        [
+            "cc", "-E",
+            "-D__STDC_VERSION__=201112L",
+            "-DNDEBUG",
+            "-D__attribute__(x)=",
+            "-D__attribute(x)=",
+            "-D__extension__=",
+            "-D__asm__(x)=",
+            "-D__asm(x)=",
+            "-D__restrict=",
+            "-D__restrict__=",
+            "-D__inline=",
+            "-D__inline__=",
+            "-D__volatile__=",
+            "-D_Noreturn=",
+            "-D__builtin_va_list=void*",
+            "-D__builtin_offsetof(t,m)=0",
+            "-D__signed__=signed",
+            "-D_Bool=int",
+            f"-I{include_dir}",
+            str(header_path),
+        ],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
         raise RuntimeError(f"C preprocessor failed: {result.stderr}")
 
     text = result.stdout
+    # Remove # line directives
     text = re.sub(r"^#\s*\d+\s+.*$", "", text, flags=re.MULTILINE)
-    text = re.sub(r"__attribute__\s*\(\([^)]*(?:\([^)]*\))*[^)]*\)\)", "", text)
+    # Remove any remaining __attribute__ that slipped through (nested parens)
     text = re.sub(r"__attribute__\s*\(\(.*?\)\)", "", text, flags=re.DOTALL)
+    # _Atomic(T) -> T
     text = re.sub(r"_Atomic\s*\(([^)]+)\)", r"\1", text)
-    text = text.replace("__extension__", "")
+    # Remove __asm__ volatile blocks
+    text = re.sub(r"__asm__?\s+volatile\s*\([^)]*\)", "", text)
     text = re.sub(r"__asm__?\s*\([^)]*\)", "", text)
     text = re.sub(r"\basm\s*\([^)]*\)", "", text)
+    # Remove remaining GCC-isms
+    text = text.replace("__extension__", "")
     text = re.sub(r"\b__restrict\b", "", text)
     text = re.sub(r"\brestrict\b", "", text)
     text = re.sub(r"\b__inline__?\b", "", text)
