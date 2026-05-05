@@ -14,7 +14,6 @@ precompileModules = true
 defaultFacets = ["shared"]
 moreLinkArgs = [
   "-undefined", "dynamic_lookup",
-  "-Wl","-rpath", "/Users/kirang/.elan/toolchains/leanprover--lean4---v4.25.2/lib/lean"
 ]
 
 

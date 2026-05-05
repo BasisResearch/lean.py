@@ -3,7 +3,8 @@
 dist/
 .mypy_cache/*
 .lake/*
-**/.github
 .DS_Store
 refs/
 **/__pycache__/
+.venv/
+.cache/
