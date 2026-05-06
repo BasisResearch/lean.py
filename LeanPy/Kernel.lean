@@ -2,13 +2,17 @@
 LeanPy.Kernel: a Pantograph-equivalent kernel facade.
 
 The implementation files (`LeanPy/Kernel/*.lean`) are lifted, with
-attribution, from Pantograph (https://github.com/lenianiva/Pantograph,
-licensed under GPL-3.0+; the upstream copy of the code lives in this
+attribution, from Pantograph (https://github.com/leanprover/Pantograph,
+licensed under Apache-2.0; the upstream copy of the code lives in this
 repo at `_examples/Pantograph/`). Where pantograph wires things to a
 JSON REPL we instead expose them through `@[python]` for direct C ABI
 use, but the goal-state semantics, tactic execution, frontend
 processing, environment serialisation, and delab logic are all
 identical.
+
+A Lake-dependency port (`require Pantograph from git ...`) was viable
+and would have avoided this in-tree fork; see
+`docs/pantograph-port.plan.md` for the migration sketch.
 
 This top-level module:
   1. Re-exports every operations module so users can write
