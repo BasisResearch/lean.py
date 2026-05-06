@@ -16,7 +16,23 @@ from ctypes import (
 from typing import Any
 
 from lean_py._parse import HeaderModel, StructDef, FuncDecl, get_header_model
-from lean_py.utils import find_lean_dynlib
+from lean_py.utils import all_lean_runtime_libs, find_lean_dynlib
+
+
+def _ptr_as_int(p) -> int:
+    """Convert any ctypes pointer-like value to a raw integer.
+
+    macOS ctypes has a long-standing quirk: passing a `POINTER(struct)`
+    instance directly to a `c_void_p`-typed parameter sometimes yields
+    a corrupted value at the C boundary (the bug is reproducible with
+    `restype = POINTER(...)` chained into another call). Using the raw
+    integer pointer value side-steps the issue entirely.
+    """
+    if p is None:
+        return 0
+    if isinstance(p, int):
+        return p
+    return ctypes.cast(p, c_void_p).value or 0
 
 
 # ============================================================================
@@ -158,11 +174,31 @@ def _build_ffi_class(model: HeaderModel, structs: dict[str, type]) -> type:
     constants = model.constants
 
     def __init__(self):
+        # Preload all Lean runtime shared libraries with RTLD_GLOBAL so
+        # that downstream user libraries can resolve their @rpath references
+        # to libleanshared / libLake_shared / libleanshared_1 / etc.
+        self._preloaded_libs: list[ctypes.CDLL] = []
+        for lib in all_lean_runtime_libs():
+            try:
+                self._preloaded_libs.append(
+                    ctypes.CDLL(str(lib), mode=ctypes.RTLD_GLOBAL)
+                )
+            except OSError:
+                pass
+        # The "main" libleanshared is the source of all the symbols we
+        # care about for the FFI; prefer the canonical handle from the
+        # toolchain.
         lib_path = find_lean_dynlib()
         self.lib = ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
+        # Additional handles to search for `leanpy_*` helpers. User
+        # libraries loaded via `LeanLibrary` will register their handle
+        # here so the FFI's inc/dec/alloc helpers can find the C
+        # bridge symbols statically linked into the user library.
+        self._extra_handles: list[ctypes.CDLL] = []
         self._missing_symbols: list[str] = []
         self._bind_exported(self.lib)
         self._bind_inline_impls()
+
         # lean_initialize is not in lean.h but exists in libleanshared
         if not hasattr(self, "lean_initialize"):
             self.lean_initialize = self.lib.lean_initialize
@@ -170,6 +206,37 @@ def _build_ffi_class(model: HeaderModel, structs: dict[str, type]) -> type:
         if not _ffi_initialized:
             _ffi_initialized = True
             self.lean_initialize()
+
+    def register_handle(self, lib):
+        """Register an additional dlopen handle as a source of symbols
+        when looking up `leanpy_*` helpers. Called by `LeanLibrary` after
+        loading a user dylib."""
+        if lib not in self._extra_handles:
+            self._extra_handles.append(lib)
+        if hasattr(self, "_helper_cache"):
+            self._helper_cache.clear()
+
+    def _find_leanpy_helper(self, name):
+        """Find a `leanpy_*` helper symbol in any registered library.
+        Caches the result to avoid repeated dlsym calls."""
+        if not hasattr(self, "_helper_cache"):
+            self._helper_cache = {}
+        if name in self._helper_cache:
+            return self._helper_cache[name]
+        for h in self._extra_handles:
+            try:
+                fn = getattr(h, name)
+                self._helper_cache[name] = fn
+                return fn
+            except AttributeError:
+                continue
+        try:
+            fn = getattr(self.lib, name)
+            self._helper_cache[name] = fn
+            return fn
+        except AttributeError:
+            self._helper_cache[name] = None
+            return None
 
     def _bind_exported(self, lib):
         for func in model.exported_functions:
@@ -195,6 +262,8 @@ def _build_ffi_class(model: HeaderModel, structs: dict[str, type]) -> type:
         "__init__": __init__,
         "_bind_exported": _bind_exported,
         "_bind_inline_impls": _bind_inline_impls,
+        "register_handle": register_handle,
+        "_find_leanpy_helper": _find_leanpy_helper,
     }
 
     # Add inline method implementations
@@ -209,19 +278,25 @@ def _build_ffi_class(model: HeaderModel, structs: dict[str, type]) -> type:
 def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
     """Add Python implementations of key static inline functions."""
     LeanObjectPtr = structs["_LeanObjectPtr"]
+    _SCALAR_BIT = 1
+
+    def _ptr_int(o):
+        if o is None:
+            return 0
+        return ctypes.cast(o, c_void_p).value or 0
 
     def lean_is_scalar(self, o):
-        return (ctypes.cast(o, c_void_p).value or 0) & 1 == 1
+        return _ptr_int(o) & _SCALAR_BIT == 1
 
     def lean_box(self, n):
         if isinstance(n, int):
             ptr_val = (n << 1) | 1
         else:
-            ptr_val = ((ctypes.cast(n, c_void_p).value or 0) << 1) | 1
+            ptr_val = (_ptr_int(n) << 1) | 1
         return ctypes.cast(c_void_p(ptr_val), LeanObjectPtr)
 
     def lean_unbox(self, o):
-        return (ctypes.cast(o, c_void_p).value or 0) >> 1
+        return _ptr_int(o) >> 1
 
     def lean_ptr_tag(self, o):
         return o.contents.m_tag
@@ -242,14 +317,41 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         return o.contents.m_rc != 0
 
     def lean_inc_ref(self, o):
+        if o is None:
+            return
+        helper = self._find_leanpy_helper("leanpy_inc_ref")
+        if helper is not None:
+            helper.argtypes = [c_void_p]
+            helper.restype = None
+            helper(_ptr_as_int(o))
+            return
         if o.contents.m_rc > 0:
             o.contents.m_rc += 1
 
     def lean_inc_ref_n(self, o, n):
+        if o is None:
+            return
+        helper = self._find_leanpy_helper("leanpy_inc_ref_n")
+        if helper is not None:
+            helper.argtypes = [c_void_p, c_size_t]
+            helper.restype = None
+            helper(_ptr_as_int(o), n)
+            return
         if o.contents.m_rc > 0:
             o.contents.m_rc += n
 
     def lean_dec_ref(self, o):
+        # Delegate to the C-side helper that correctly handles MT objects
+        # and properly invokes the runtime's deallocation chain.
+        if o is None:
+            return
+        helper = self._find_leanpy_helper("leanpy_dec_ref")
+        if helper is not None:
+            helper.argtypes = [c_void_p]
+            helper.restype = None
+            helper(_ptr_as_int(o))
+            return
+        # Fallback — best-effort (may not handle MT correctly).
         if o.contents.m_rc > 1:
             o.contents.m_rc -= 1
         elif o.contents.m_rc != 0:
@@ -365,6 +467,121 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         offset = str_cls.m_data.offset
         addr = ctypes.addressof(s.contents) + offset
         return ctypes.cast(addr, c_char_p)
+
+    # ----- Allocation primitives (delegated to leanpy_native helpers) -----
+    def lean_alloc_ctor(self, tag, num_objs, scalar_sz):
+        fn = self._find_leanpy_helper("leanpy_alloc_ctor")
+        if fn is None:
+            raise RuntimeError("leanpy_alloc_ctor not found — leanpy_native not linked")
+        fn.argtypes = [c_uint, c_uint, c_uint]
+        fn.restype = LeanObjectPtr
+        return fn(tag, num_objs, scalar_sz)
+
+    def lean_alloc_array(self, size, capacity):
+        fn = self._find_leanpy_helper("leanpy_alloc_array")
+        if fn is None:
+            raise RuntimeError("leanpy_alloc_array not found — leanpy_native not linked")
+        fn.argtypes = [c_size_t, c_size_t]
+        fn.restype = LeanObjectPtr
+        return fn(size, capacity)
+
+    def lean_array_set_core(self, o, i, v):
+        arr_cls = structs.get("lean_array_object")
+        arr = ctypes.cast(o, POINTER(arr_cls))
+        offset = arr_cls.m_data.offset
+        addr = ctypes.addressof(arr.contents) + offset
+        ptr_array = ctypes.cast(addr, POINTER(LeanObjectPtr * (i + 1)))
+        ptr_array.contents[i] = v
+
+    # ----- Numeric conversions (inline in lean.h) -----
+    def lean_box_uint64(self, v):
+        # Boxed uint64: small object holding the 64-bit value.
+        # Use the exported lean_box_uint64 if present.
+        fn = getattr(self.lib, "lean_box_uint64", None)
+        if fn is not None:
+            fn.argtypes = [c_uint64]; fn.restype = LeanObjectPtr
+            return fn(v)
+        # Fallback: scalar tagged pointer (only valid for small values).
+        return self.lean_box(v)
+
+    def lean_unbox_uint64(self, o):
+        fn = getattr(self.lib, "lean_unbox_uint64", None)
+        if fn is not None:
+            fn.argtypes = [LeanObjectPtr]; fn.restype = c_uint64
+            return fn(o)
+        return self.lean_unbox(o)
+
+    def lean_box_float(self, v):
+        fn = getattr(self.lib, "lean_box_float", None)
+        if fn is None:
+            raise RuntimeError("lean_box_float symbol not found")
+        fn.argtypes = [c_double]; fn.restype = LeanObjectPtr
+        return fn(v)
+
+    def lean_unbox_float(self, o):
+        fn = getattr(self.lib, "lean_unbox_float", None)
+        if fn is None:
+            raise RuntimeError("lean_unbox_float symbol not found")
+        fn.argtypes = [LeanObjectPtr]; fn.restype = c_double
+        return fn(o)
+
+    def lean_unsigned_to_nat(self, n):
+        fn = getattr(self.lib, "lean_unsigned_to_nat", None)
+        if fn is None:
+            return self.lean_box(n)
+        fn.argtypes = [c_uint]; fn.restype = LeanObjectPtr
+        return fn(n)
+
+    def lean_uint64_to_nat(self, n):
+        fn = getattr(self.lib, "lean_uint64_to_nat", None)
+        if fn is None:
+            return self.lean_box(n)
+        fn.argtypes = [c_uint64]; fn.restype = LeanObjectPtr
+        return fn(n)
+
+    def lean_uint64_of_nat(self, p):
+        # Inline: small scalar fast-path; large path via lean_uint64_of_big_nat.
+        if self.lean_is_scalar(p):
+            return int(self.lean_unbox(p))
+        fn = getattr(self.lib, "lean_uint64_of_big_nat", None)
+        if fn is None:
+            raise RuntimeError("lean_uint64_of_big_nat not found and Nat is not scalar")
+        fn.argtypes = [LeanObjectPtr]; fn.restype = c_uint64
+        return int(fn(p))
+
+    def lean_int64_to_int(self, n):
+        # Prefer the C-side helper from leanpy_native, which delegates
+        # to the static-inline `lean_int64_to_int` exactly.
+        fn = self._find_leanpy_helper("leanpy_int64_to_int")
+        if fn is not None:
+            fn.argtypes = [c_int64]; fn.restype = LeanObjectPtr
+            return fn(n)
+        # Fallback (mirrors `lean.h`): encode int32-range as a scalar.
+        if -(1 << 31) <= n <= (1 << 31) - 1:
+            return self.lean_box(n & 0xFFFFFFFF)
+        big = getattr(self.lib, "lean_big_int64_to_int", None)
+        if big is None:
+            return self.lean_box(n & ((1 << 63) - 1))
+        big.argtypes = [c_int64]; big.restype = LeanObjectPtr
+        return big(n)
+
+    def lean_int64_of_int(self, p):
+        fn = self._find_leanpy_helper("leanpy_int64_of_int")
+        if fn is not None:
+            fn.argtypes = [LeanObjectPtr]; fn.restype = c_int64
+            return int(fn(p))
+        if self.lean_is_scalar(p):
+            return int(self.lean_scalar_to_int(p))
+        raise RuntimeError("leanpy_int64_of_int not found")
+
+    def lean_scalar_to_int(self, p):
+        # The C runtime encodes Int as `lean_box((unsigned)(int)n)`, so
+        # only the low 32 bits of the unboxed value are meaningful.
+        # Sign-extend back to a Python int.
+        v = self.lean_unbox(p) & 0xFFFFFFFF
+        if v & 0x80000000:
+            v -= 1 << 32
+        return v
 
     # Register all methods
     for name, func in list(locals().items()):

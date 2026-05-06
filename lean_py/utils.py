@@ -1,28 +1,91 @@
+"""Utility helpers for finding the active Lean toolchain and shared libraries."""
+
+from __future__ import annotations
+
+import os
 import subprocess
+import sys
+from functools import lru_cache
 from pathlib import Path
 
+
 def run_command(args: list[str], **kwargs) -> str:
-    """Run command specified by `args` and return the result as a string"""
+    """Run a command and return the trimmed stdout."""
     res = subprocess.run(args, capture_output=True, **kwargs)
     if res.returncode != 0:
-        raise RuntimeError(f"Command {args} returned non-zero exit code: {res.returncode}")
-    return bytes.decode(res.stdout).strip()
+        stderr = res.stderr.decode(errors="replace") if res.stderr else ""
+        raise RuntimeError(
+            f"Command {args} exited with {res.returncode}: {stderr}"
+        )
+    return res.stdout.decode().strip()
 
-def _lean_paths() -> list[Path]:
-    """Return list of paths to search for lean libraries."""
-    lean_path = run_command(['lake', 'env','printenv', 'LEAN_PATH'])
-    return [Path(path) for path in lean_path.split(':')]
+
+@lru_cache(maxsize=1)
+def lean_prefix() -> Path:
+    """Return the path printed by `lean --print-prefix`."""
+    return Path(run_command(["lean", "--print-prefix"]))
+
+
+def lean_lib_dir() -> Path:
+    """Where Lean's own shared libraries live."""
+    return lean_prefix() / "lib" / "lean"
+
+
+def lean_include_dir() -> Path:
+    """Directory containing `lean/lean.h`."""
+    return lean_prefix() / "include"
+
+
+@lru_cache(maxsize=1)
+def shared_lib_extension() -> str:
+    if sys.platform == "darwin":
+        return ".dylib"
+    if sys.platform == "win32":
+        return ".dll"
+    return ".so"
+
 
 def find_lean_dynlib() -> Path:
-    """
-    Find the path to the lean dynlib.
-    """
-    lean_paths = _lean_paths()
-    # Try different extensions based on platform
-    for lean_path in lean_paths:
-        for ext in [".dylib", ".so", ".dll"]:
-            lib_file = lean_path / f"libleanshared{ext}"
-            if lib_file.exists():
-                return lib_file
-    raise RuntimeError(f"Could not find libleanshared in {lean_path}")
+    """Locate `libleanshared.<ext>` in the active toolchain's `lib/lean`."""
+    ext = shared_lib_extension()
+    lib = lean_lib_dir() / f"libleanshared{ext}"
+    if lib.exists():
+        return lib
+    # Fallback: scan LEAN_PATH (less reliable, retained for back-compat).
+    try:
+        out = run_command(["lake", "env", "printenv", "LEAN_PATH"])
+        for d in out.split(":"):
+            cand = Path(d) / f"libleanshared{ext}"
+            if cand.exists():
+                return cand
+    except Exception:
+        pass
+    raise RuntimeError(f"libleanshared{ext} not found in {lean_lib_dir()}")
 
+
+def all_lean_runtime_libs() -> list[Path]:
+    """All shared libs in `lib/lean` that are likely needed at load time.
+
+    Includes `libleanshared`, `libleanshared_*`, `libLake_shared`, and any
+    other `lib*shared.<ext>` siblings.
+    """
+    ext = shared_lib_extension()
+    d = lean_lib_dir()
+    if not d.exists():
+        return []
+    libs = sorted(d.glob(f"lib*shared*{ext}"))
+    # `libleanshared` should typically be loaded *after* `libleanshared_1/2`
+    # because it depends on them; sorting alphabetically achieves this.
+    return libs
+
+
+def add_lean_lib_to_dyld_path() -> None:
+    """Add Lean's `lib/lean` to the OS-level dynamic-loader search path
+    for the current process. Useful before constructing a `LeanLibrary`
+    when the dylib has unresolved `@rpath` references to Lean's runtime.
+    """
+    d = str(lean_lib_dir())
+    key = "DYLD_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH"
+    existing = os.environ.get(key, "")
+    if d not in existing.split(":"):
+        os.environ[key] = f"{d}:{existing}" if existing else d

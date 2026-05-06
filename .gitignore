@@ -8,3 +8,5 @@ refs/
 **/__pycache__/
 .venv/
 .cache/
+_examples/
+.pytest_cache/

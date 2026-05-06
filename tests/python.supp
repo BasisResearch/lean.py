@@ -1,0 +1,24 @@
+# CPython's interpreter holds a number of long-lived allocations
+# (interned strings, type objects, frozen modules) that are reported
+# as "still reachable" by valgrind. Suppress them so the leak check
+# focuses on Lean/LeanPy allocations.
+{
+   <python-frozen-modules>
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:_Py_FreeList_Init
+}
+{
+   <python-import-system>
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   obj:*libpython*
+}
+{
+   <python-arena>
+   Memcheck:Leak
+   ...
+   fun:PyObject_Malloc
+}

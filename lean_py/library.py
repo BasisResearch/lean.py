@@ -1,59 +1,340 @@
+"""
+Wrapper around a compiled Lean library that exposes `@[python]`-annotated
+declarations.
+
+Usage:
+    >>> lib = LeanLibrary("path/to/MyLib.dylib", "MyLib")
+    >>> lib.bar(7)             # exported as `py_bar`
+    >>> lib.Color.red          # generated wrapper for inductive Color
+    >>> lib.Point(3, 4)        # generated wrapper for structure Point
+
+The library:
+  1. Loads the dylib via ctypes (with RTLD_GLOBAL so subsequent libs see
+     its symbols).
+  2. Calls `initialize_<libname>` once to run static initialisers.
+  3. Calls the JSON registry exports `<libname>_funcs_json` and
+     `<libname>_types_json` to discover what's exposed.
+  4. Builds a `Marshaller` and a Python wrapper for each registered
+     function and type.
+"""
+
+from __future__ import annotations
+
 import ctypes
+import os
+import subprocess
+import sys
+from ctypes import POINTER, c_uint8, c_void_p
 from pathlib import Path
+from typing import Any, Callable
 
 from lean_py.base_types import LeanObject
 from lean_py.lean_ffi import get_lean_ffi
+from lean_py.marshal import LeanInductiveValue, Marshaller, TypeWrapper
+from lean_py.registry import FuncInfo, LibraryRegistry, TypeInfo
+from lean_py.utils import lean_lib_dir
 
-from .lean_types import LeanFFI
+
+def _ensure_rpath(dylib: Path) -> None:
+    """On macOS, rewrite any `@rpath/libFoo.dylib` references to absolute
+    paths under Lean's `lib/lean`. This lets `dlopen` succeed without a
+    pre-set `DYLD_LIBRARY_PATH` even when the library was linked without
+    a runtime path.
+
+    On other platforms this is a no-op (Linux uses RUNPATH baked in by
+    the linker plus our preloaded `RTLD_GLOBAL` libs).
+    """
+    if sys.platform != "darwin":
+        return
+    libdir = lean_lib_dir()
+    try:
+        out = subprocess.run(
+            ["otool", "-L", str(dylib)],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return
+
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.startswith("@rpath/"):
+            continue
+        # Form: "@rpath/libFoo.dylib (compatibility version ...)"
+        ref = line.split(" ", 1)[0]
+        leaf = ref[len("@rpath/"):]
+        candidate = libdir / leaf
+        if not candidate.exists():
+            continue
+        try:
+            subprocess.run(
+                ["install_name_tool", "-change", ref, str(candidate), str(dylib)],
+                check=True, capture_output=True,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+
+
+# ============================================================================
+# Generated type wrappers
+# ============================================================================
+
+
+class _InductiveType:
+    """Generated namespace for a Lean inductive's constructors.
+
+    For each constructor, exposes a callable that produces a
+    `LeanInductiveValue`. For enum-like (no-arg) ctors, exposes them
+    as class attributes that are pre-built `LeanInductiveValue`s.
+    """
+
+    def __init__(self, ti: TypeInfo, marshaller: Marshaller):
+        self._ti = ti
+        self._marshaller = marshaller
+        for ctor in ti.ctors:
+            if not ctor.fields:
+                v = LeanInductiveValue(ti.name, ctor.name, ctor.tag, ())
+                setattr(self, ctor.name, v)
+            else:
+                def _make(*args, _c=ctor):
+                    if len(args) != len(_c.fields):
+                        raise TypeError(
+                            f"{ti.name}.{_c.name} expects {len(_c.fields)} args, got {len(args)}"
+                        )
+                    return LeanInductiveValue(ti.name, _c.name, _c.tag, tuple(args))
+                setattr(self, ctor.name, _make)
+
+    def __repr__(self) -> str:
+        ctor_names = ", ".join(c.name for c in self._ti.ctors)
+        return f"<LeanType {self._ti.name} ({ctor_names})>"
+
+
+class _StructureType(_InductiveType):
+    """Specialised wrapper for single-ctor types (structures / records).
+
+    Calling the type as `Point(1, 2)` builds an inductive value with the
+    sole constructor.
+    """
+
+    def __init__(self, ti: TypeInfo, marshaller: Marshaller):
+        super().__init__(ti, marshaller)
+        self._ctor = ti.ctors[0]
+
+    def __call__(self, *args, **kwargs) -> LeanInductiveValue:
+        if kwargs:
+            raise TypeError(
+                f"{self._ti.name}: keyword fields not supported yet "
+                f"(use positional args)"
+            )
+        if len(args) != len(self._ctor.fields):
+            raise TypeError(
+                f"{self._ti.name} expects {len(self._ctor.fields)} args, got {len(args)}"
+            )
+        return LeanInductiveValue(
+            self._ti.name, self._ctor.name, self._ctor.tag, tuple(args)
+        )
+
+
+# ============================================================================
+# Generated function wrappers
+# ============================================================================
+
+
+def _build_callable(
+    lib: ctypes.CDLL, finfo: FuncInfo, marshaller: Marshaller
+) -> Callable:
+    """Build a Python wrapper around an `@[export]`'d Lean function.
+
+    Conventions for the C ABI of Lean-exported functions:
+      * Most parameter types are `lean_object*`. Exceptions: scalar value
+        types (Bool, UInt8/16/32/64, USize, Float) are passed as their
+        natural C types, but inductive parameters are pointer-shaped.
+      * IO-returning functions take a trailing `lean_io.RealWorld` arg
+        (just `lean_box(0)`); the result is a tagged Result object.
+    """
+    try:
+        cfn = getattr(lib, finfo.exportName)
+    except AttributeError as e:
+        raise RuntimeError(
+            f"Symbol {finfo.exportName} not found in library "
+            f"(declared in registry but missing from dylib)"
+        ) from e
+
+    ret = finfo.returnType
+    is_io = ret.kind == "io"
+
+    pwraps: list[TypeWrapper] = [marshaller.wrapper_for(p) for p in finfo.params]
+    rwrap: TypeWrapper = marshaller.wrapper_for(ret)
+
+    # We use `c_void_p` for any pointer-shaped argument or return value
+    # to sidestep a ctypes oddity on macOS where storing a returned
+    # `POINTER(struct)` and then passing it to another C function
+    # corrupts the pointer in some configurations.
+    def _ctype_for_call(ct):
+        # Pointer-shaped: collapse to c_void_p.
+        if isinstance(ct, type) and issubclass(ct, ctypes._Pointer):
+            return c_void_p
+        return ct
+
+    # Build the argtypes list ONCE then assign — ctypes does not pick up
+    # in-place mutation of `cfn.argtypes`, so `.append(...)` after
+    # assignment would silently leave the FFI thinking the function only
+    # has one parameter.
+    argtypes = [_ctype_for_call(w.ctype) for w in pwraps]
+    if is_io:
+        argtypes.append(c_void_p)
+    cfn.argtypes = argtypes
+    cfn.restype = _ctype_for_call(rwrap.ctype)
+
+    # If the return is a pointer, we need to cast it back to LeanObjectPtr
+    # before handing it to the unmarshaller.
+    from lean_py._runtime import get_structs
+    LObjPtr = get_structs()["_LeanObjectPtr"]
+    return_is_pointer = (
+        isinstance(rwrap.ctype, type)
+        and issubclass(rwrap.ctype, ctypes._Pointer)
+    )
+
+    def _wrapper(*args):
+        if len(args) != len(pwraps):
+            raise TypeError(
+                f"{finfo.exportName}: expected {len(pwraps)} args, got {len(args)}"
+            )
+        cargs = []
+        for w, a in zip(pwraps, args):
+            v = w.to_lean(a)
+            if isinstance(w.ctype, type) and issubclass(w.ctype, ctypes._Pointer):
+                # Convert pointer args to raw pointer values to match cfn.argtypes.
+                v = ctypes.cast(v, c_void_p).value if v is not None else 0
+            cargs.append(v)
+        if is_io:
+            cargs.append(c_void_p(1))
+        result_raw = cfn(*cargs)
+        if return_is_pointer:
+            result_ptr = ctypes.cast(c_void_p(result_raw), LObjPtr)
+            return rwrap.from_lean(result_ptr)
+        return rwrap.from_lean(result_raw)
+
+    _wrapper.__name__ = finfo.exportName
+    _wrapper.__qualname__ = f"LeanLibrary.{finfo.exportName}"
+    _wrapper.__doc__ = (
+        f"Lean function `{finfo.declName}` exposed as `{finfo.exportName}`.\n"
+        f"Signature: ({', '.join(p.short() for p in finfo.params)}) -> {ret.short()}"
+    )
+    return _wrapper
+
+
+# ============================================================================
+# LeanLibrary
+# ============================================================================
+
 
 class LeanLibrary:
-    """
-    Wrapper for a Lean library with Python bindings.
-    """
-    def __init__(self, dll_path: Path, library_name: str):
-        """Loads and initialises a Lean Library"""
-        self.ffi : LeanFFI = get_lean_ffi()
-        self.library_name: str = library_name
-        self.lib = ctypes.CDLL(dll_path, mode=ctypes.RTLD_GLOBAL)
-        
-    #     # Call the initialization function
-        self._initialize_library()
-        
-    #     # Cache for function wrappers
-    #     self._function_cache: Dict[str, Callable] = {}
+    """A loaded Lean library with `@[python]` bindings."""
 
-    def _initialize_library(self):
-        """
-        Call the library initialization function.
-        
-        This calls initialize_<library_name> with builtin=1 to register
-        all exported functions.
-        
-        Raises:
-            RuntimeError: If initialization fails
-        """
-        init_func_name = f"initialize_{self.library_name}"
+    def __init__(self, dylib_path: str | os.PathLike, library_name: str):
+        self.path = Path(dylib_path)
+        self.name = library_name
+        self.ffi = get_lean_ffi()
+        # Ensure the dylib can resolve its @rpath references to Lean's runtime.
+        _ensure_rpath(self.path)
+        # Use `PyDLL` so that ctypes does NOT release the GIL when calling
+        # into Lean. This matters for `LeanPy.Python.*` functions which
+        # call back into the Python C API: those calls require the GIL
+        # to be held by the calling thread.
+        self.lib = ctypes.PyDLL(str(self.path), mode=ctypes.RTLD_GLOBAL)
+
+        # Make this dylib's `leanpy_*` C-bridge symbols visible to the
+        # FFI helper-lookup chain (used by ref-count and allocation ops).
+        self.ffi.register_handle(self.lib)
+
+        self._initialize_lean_module()
+
+        self.registry = self._load_registry()
+
+        self.marshaller = Marshaller(self.registry)
+        self._funcs: dict[str, Callable] = {}
+        self._types: dict[str, _InductiveType] = {}
+
+        for ti in self.registry.types:
+            wrapper = _StructureType(ti, self.marshaller) \
+                if len(ti.ctors) == 1 \
+                else _InductiveType(ti, self.marshaller)
+            short = ti.name.split(".")[-1]
+            self._types[short] = wrapper
+            setattr(self, short, wrapper)
+
+        for fi in self.registry.funcs:
+            wrap = _build_callable(self.lib, fi, self.marshaller)
+            short = fi.declName.split(".")[-1]
+            self._funcs[short] = wrap
+            self._funcs[fi.exportName] = wrap
+            if not hasattr(self, short):
+                setattr(self, short, wrap)
+            if not hasattr(self, fi.exportName):
+                setattr(self, fi.exportName, wrap)
+
+    # -- internal ---------------------------------------------------------
+
+    def _initialize_lean_module(self) -> None:
+        init_name = f"initialize_{self.name}"
         try:
-            init_func = getattr(self.lib, init_func_name)
-            init_func.argtypes = [ctypes.c_uint8]
-            init_func.restype = ctypes.POINTER(LeanObject)
-            
-            result = init_func(1)
-            
-    #         # Check if initialization succeeded
-            if result.contents.m_tag == 0:
-                # Success (IO Ok)
-                self.ffi.dec_ref(result)
-            else:
-                # Error (IO Error)
-                self.ffi.io_result_show_error(result)
-                self.ffi.dec_ref(result)
-                raise RuntimeError(f"Lean library initialization failed for {self.library_name}")
-        except AttributeError:
+            init_fn = getattr(self.lib, init_name)
+        except AttributeError as e:
             raise RuntimeError(
-                f"Library does not have initialization function {init_func_name}. "
-                f"Make sure the library was compiled with @[python] annotations."
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize library {self.library_name}: {e}")
+                f"library does not export {init_name}; was it compiled with "
+                f"`@[python]` attributes and `precompileModules`/`shared`?"
+            ) from e
+        init_fn.argtypes = [c_uint8, POINTER(LeanObject)]
+        init_fn.restype = POINTER(LeanObject)
 
+        result = init_fn(1, ctypes.cast(c_void_p(1), POINTER(LeanObject)))
+        if result.contents.m_tag != 0:
+            self.ffi.io_result_show_error(result)
+            self.ffi.dec_ref(result)
+            raise RuntimeError(f"initialize_{self.name} failed")
+        self.ffi.dec_ref(result)
+
+    def _load_registry(self) -> LibraryRegistry:
+        funcs_sym = f"{self.name}_funcs_json"
+        types_sym = f"{self.name}_types_json"
+        funcs_json = self._call_string_export(funcs_sym)
+        types_json = self._call_string_export(types_sym)
+        return LibraryRegistry.from_json_strings(funcs_json, types_json)
+
+    def _call_string_export(self, name: str) -> str:
+        try:
+            fn = getattr(self.lib, name)
+        except AttributeError:
+            return ""
+        fn.argtypes = [POINTER(LeanObject)]
+        fn.restype = POINTER(LeanObject)
+        unit = ctypes.cast(c_void_p(1), POINTER(LeanObject))
+        result_ptr = fn(unit)
+        try:
+            size = self.ffi.lean_string_size(result_ptr)
+            if size <= 1:
+                return ""
+            cstr = self.ffi.lean_string_cstr(result_ptr)
+            raw = cstr.value if isinstance(cstr, ctypes.c_char_p) else cstr
+            return (raw or b"").decode("utf-8")
+        finally:
+            self.ffi.dec_ref(result_ptr)
+
+    # -- public -----------------------------------------------------------
+
+    def __getitem__(self, key: str) -> Any:
+        if key in self._funcs:
+            return self._funcs[key]
+        if key in self._types:
+            return self._types[key]
+        raise KeyError(key)
+
+    def __repr__(self) -> str:
+        return (
+            f"<LeanLibrary {self.name!r} "
+            f"funcs={len(self._funcs)} types={len(self._types)}>"
+        )
+
+
+# Re-export under both names for compatibility.
+Library = LeanLibrary
