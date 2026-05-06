@@ -1,44 +1,135 @@
 SymPy Tactic
 ============
 
-This example implements a real Lean tactic (``by sympy``) that delegates to
-SymPy. When Lean encounters a goal like ``1 + 1 = 2``, it sends the
-``Lean.Expr`` tree to Python, where SymPy simplifies and verifies it.
+This example implements ``by sympy`` -- a real Lean tactic that closes
+arithmetic goals by delegating to SymPy. When Lean sees a goal like
+``(1 : Int) + 1 = 2``, it sends the entire ``Lean.Expr`` tree to Python,
+SymPy verifies it, and the goal is closed.
 
-`View source on GitHub <https://github.com/kiranandcode/lean.py/tree/main/examples/04_sympy_tactic>`_
+`View full source on GitHub <https://github.com/kiranandcode/lean.py/tree/main/examples/04_sympy_tactic>`_
 
-How It Works
-------------
+The architecture
+----------------
 
-1. The ``sympy`` tactic extracts the main goal's type as a ``Lean.Expr``.
-2. It wraps the expression with ``Py.ofLeanObj`` and calls a Python function.
-3. On the Python side, a recursive ``expr_to_sympy`` function walks the
-   ``Lean.Expr`` ADT (available thanks to ``derive_python``) and builds the
-   equivalent SymPy expression.
-4. SymPy's ``simplify`` checks whether the expression holds.
-5. If SymPy accepts, the tactic closes the goal using an oracle axiom.
+The data flow looks like this:
 
-Lean Side
----------
+1. The ``sympy`` tactic extracts the goal's type as a ``Lean.Expr``.
+2. ``Py.ofLeanObj`` wraps the expression and sends it to Python.
+3. On the Python side, ``derive_python`` for ``Lean.Expr`` (registered in
+   ``LeanPy/Reflect.lean``) means the expression arrives as a fully-typed
+   ``LeanInductiveValue`` tree.
+4. A recursive converter walks the tree and builds the equivalent SymPy
+   expression.
+5. ``sympy.simplify`` checks whether the proposition holds.
+6. If SymPy accepts, the tactic closes the goal with an oracle axiom.
 
-.. literalinclude:: ../../../examples/04_sympy_tactic/lean/SymPyTactic.lean
-   :language: lean
-   :caption: examples/04_sympy_tactic/lean/SymPyTactic.lean
+The oracle axiom
+----------------
 
-Demo proofs using the tactic:
+The soundness story is explicit: an axiom declares that anything SymPy
+accepts is true:
 
-.. literalinclude:: ../../../examples/04_sympy_tactic/lean/Demo.lean
-   :language: lean
-   :caption: examples/04_sympy_tactic/lean/Demo.lean
+.. code-block:: lean
 
-Python Side
------------
+   axiom sympy_oracle (p : Prop) : p
 
-The ``lean_to_sympy`` module converts Lean expression trees to SymPy:
+This is the **only** point of unsoundness. If SymPy is wrong about
+something, this axiom is where the blame falls. In practice, SymPy is
+reliable for the arithmetic fragment.
 
-.. literalinclude:: ../../../examples/04_sympy_tactic/python/lean_to_sympy.py
-   :language: python
-   :caption: examples/04_sympy_tactic/python/lean_to_sympy.py
+The Lean tactic
+---------------
+
+The tactic itself is small. It gets the goal type, sends it to Python,
+and assigns the oracle proof if accepted:
+
+.. code-block:: lean
+
+   @[python "sympy_expr_check_prop"]
+   def sympyExprCheckProp (e : Lean.Expr) : IO Bool := do
+     init ()
+     let handle ← Py.ofLeanObj e
+     let mod ← import_ "lean_to_sympy"
+     let checkFn ← mod.getAttr "decode_and_check_prop"
+     (← checkFn.call #[handle]).toBool
+
+   syntax (name := sympyTac) "sympy" : tactic
+
+   @[tactic sympyTac]
+   def evalSympy : Tactic := fun stx =>
+     match stx with
+     | `(tactic| sympy) => do
+       let goal ← getMainGoal
+       let goalType ← goal.getType
+       let accepted ← sympyExprCheckProp goalType
+       if !accepted then
+         throwError "sympy: oracle rejected the goal"
+       let proof ← Meta.mkAppOptM ``sympy_oracle #[goalType]
+       goal.assign proof
+     | _ => throwUnsupportedSyntax
+
+The key line is ``Py.ofLeanObj e`` -- this takes a Lean ``Expr`` and
+makes it available to Python as a ``LeanInductiveValue`` tree, thanks to
+the ``derive_python`` registrations for ``Lean.Expr``, ``Lean.Name``, etc.
+
+Converting Expr to SymPy
+-------------------------
+
+The Python side walks the ``LeanInductiveValue`` tree recursively.
+A ``Lean.Name`` like ``HAdd.hAdd`` gets pattern-matched and mapped to
+SymPy's ``+`` operator. Here's the core dispatch:
+
+.. code-block:: python
+
+   _DISPATCH = {
+       "HAdd.hAdd": _binop(lambda a, b: a + b),
+       "HSub.hSub": _binop(lambda a, b: a - b),
+       "HMul.hMul": _binop(lambda a, b: a * b),
+       "HDiv.hDiv": _binop(lambda a, b: a / b),
+       "HPow.hPow": _binop(lambda a, b: a ** b),
+       "Eq":        (2, lambda args: Eq(expr_to_sympy(args[-2]),
+                                        expr_to_sympy(args[-1]))),
+       "Neg.neg":   _unop(lambda x: -x),
+       "Nat.succ":  (1, lambda args: expr_to_sympy(args[-1]) + 1),
+       "Int.ofNat": (1, lambda args: expr_to_sympy(args[-1])),
+       ...
+   }
+
+The main converter handles literals, variables, ``mdata`` (unwrapped
+transparently), and application nodes (uncurried and dispatched):
+
+.. code-block:: python
+
+   def expr_to_sympy(expr):
+       if expr.ctor == "lit":
+           return Integer(expr.fields[0].fields[0])
+       if expr.ctor == "app":
+           head, args = uncurry_app(expr)
+           entry = _DISPATCH.get(name_to_str(head.fields[0]))
+           if entry:
+               _, builder = entry
+               return builder(args)
+       ...
+
+The proposition checker just simplifies and checks:
+
+.. code-block:: python
+
+   def sympy_prop_check(prop):
+       return simplify(prop) is sympy.true
+
+Using the tactic
+----------------
+
+With everything in place, proofs look like this:
+
+.. code-block:: lean
+
+   import SymPyTactic
+
+   example : (1 : Int) + 1 = 2 := by sympy
+   example : (3 : Int) * 4 = 12 := by sympy
+   example : (5 : Int) * 6 = 30 := by sympy
 
 Running
 -------
@@ -46,17 +137,17 @@ Running
 .. code-block:: bash
 
    cd examples/04_sympy_tactic
-   uv pip install sympy
    cd lean && lake build && cd ..
    uv run --project python python/main.py
 
-Key Takeaways
--------------
+What to take away
+-----------------
 
-* ``Py.ofLeanObj`` converts a Lean value into a Python-accessible handle.
-* ``derive_python`` for ``Lean.Expr``, ``Lean.Name``, etc. makes it possible
-  to pattern-match on Lean's kernel AST from Python.
-* The dispatch table pattern (mapping Lean operator names to SymPy builders)
-  is extensible -- add entries to support more operations.
-* The oracle axiom pattern keeps the tactic sound within Lean's logic: if
-  SymPy is wrong, the axiom is the only point of unsoundness.
+* ``Py.ofLeanObj`` bridges Lean's kernel AST into Python as structured data.
+* ``derive_python`` for ``Lean.Expr`` / ``Lean.Name`` makes pattern-matching
+  on Lean's internal representation possible from Python.
+* The dispatch table pattern is **extensible** -- add entries to support
+  more operations.
+* The oracle axiom makes the trust boundary **explicit**.
+* This architecture generalises: any decision procedure available from
+  Python (Z3, CAS systems, ML models) can back a Lean tactic this way.
