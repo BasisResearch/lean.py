@@ -468,12 +468,13 @@ class Marshaller:
                     ffi.lean_dec(p)          # drop the IO ctor → val_ptr's
                                              #   shared ownership stays at 1
                     return inner.from_lean(val_ptr)  # consumes val_ptr
-                # error case: stringify and raise
+                # error case: decode the IO.Error ctor and raise a typed
+                # exception (LeanError or LeanPyCallbackError).
                 err_ptr = _ctor_get(ffi, p, 0)
                 ffi.lean_inc(err_ptr)
-                msg = self._format_io_error(err_ptr)
+                exc = self._build_io_exception(err_ptr)
                 ffi.lean_dec(p)
-                raise RuntimeError(f"Lean IO error: {msg}")
+                raise exc
             def to_lean(v):
                 # Wrap a value as an IO Ok result.
                 cell = ffi.lean_alloc_ctor(0, 2, 0)
@@ -525,39 +526,171 @@ class Marshaller:
             return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
         if k == "pyobject":
-            # Opaque pointer; just hand it back.
-            return self._opaque_wrapper(t)
+            return self._py_object_wrapper(t)
 
         # Fall-through: opaque
         return self._opaque_wrapper(t)
 
-    def _opaque_wrapper(self, t: TypeRepr) -> TypeWrapper:
+    def _py_object_wrapper(self, t: TypeRepr) -> TypeWrapper:
+        """Wrapper for the `pyobject` TypeRepr (Lean's `LeanPy.Python.Py`).
+
+        When Lean returns a `Py`, the Lean side hands us a `lean_object*`
+        wrapping a CPython `PyObject*`. We extract the `PyObject*` via
+        `leanpy_unwrap_pyobject` (which bumps Py's refcount), turn it
+        into a live Python object via `ctypes.cast(..., py_object).value`,
+        then drop the Lean handle. The caller sees an honest-to-goodness
+        Python value, not an opaque LeanObj.
+
+        For passing Python values back to Lean as `Py`, a Python-side
+        `LeanObj` (i.e. round-tripping a previously-received handle) is
+        accepted; arbitrary Python values are not (use `Py.ofString`
+        etc. on the Lean side instead, or call into a Lean function
+        that takes the appropriate primitive type).
+        """
         ObjPtr = self._lean_object_ptr
+        ffi = self.ffi
+        # `leanpy_unwrap_pyobject` is exported from the C bridge.
+        unwrap = ffi._find_leanpy_helper("leanpy_unwrap_pyobject")
+        if unwrap is not None:
+            unwrap.argtypes = [ObjPtr]
+            unwrap.restype = ctypes.py_object
+
+        def from_lean(p):
+            if unwrap is None or not p:
+                return LeanObj(p, owned=True)
+            try:
+                py_val = unwrap(p)
+            except Exception:
+                ffi.lean_dec(p)
+                return None
+            ffi.lean_dec(p)
+            return py_val
+
+        def to_lean(v):
+            if isinstance(v, LeanObj):
+                ptr = v.ptr
+                if ptr:
+                    ffi.lean_inc(ptr)
+                return ptr
+            raise TypeError(
+                "passing arbitrary Python values back to Lean as Py is not "
+                "supported; convert via LeanPy.Python.Py.ofString / etc. on "
+                "the Lean side, or pass through a LeanObj handle"
+            )
+        return TypeWrapper(t, from_lean, to_lean, ObjPtr)
+
+    def _opaque_wrapper(self, t: TypeRepr) -> TypeWrapper:
+        """A wrapper for any Lean type that we can't introspect (Py,
+        kernel `GoalState`, anything not in the `derive_python` registry).
+
+        Python sees these as `LeanObj` handles.
+
+        Passing semantics: `to_lean` increments the refcount and keeps
+        the `LeanObj` alive on the Python side. The Lean function
+        receives an owned reference (matching `lean_obj_arg` calling
+        convention). The +1 we add covers that ownership; the LeanObj's
+        own ref is preserved so the same handle can be threaded through
+        multiple ops.
+        """
+        ObjPtr = self._lean_object_ptr
+        ffi = self.ffi
         def from_lean(p):
             return LeanObj(p, owned=True)
         def to_lean(v):
             if isinstance(v, LeanObj):
-                p = v.release()
+                p = v.ptr
+                if p:
+                    ffi.lean_inc(p)
                 return p
             return v
         return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
-    def _format_io_error(self, ptr: Any) -> str:
-        """Best-effort stringification of an `IO.Error` constructor."""
+    # Lean's `IO.Error` inductive (Init/System/IOError.lean), Lean 4.25.x:
+    # the ctor order is the basis for the runtime tag. Anything we don't
+    # recognise falls through to `f"tag{n}"`.
+    #
+    # Most ctors carry `(filename : Option String) (osCode : UInt32)
+    # (details : String)`; `userError` carries `(msg : String)`;
+    # `unexpectedEof` is nullary. We only look at field 0 here — for
+    # non-userError variants that's typically the filename, so
+    # `_format` shows it via `context["raw_field0"]`.
+    _IO_ERROR_TAGS = {
+        0:  "alreadyExists",
+        1:  "otherError",
+        2:  "resourceBusy",
+        3:  "resourceVanished",
+        4:  "unsupportedOperation",
+        5:  "hardwareFault",
+        6:  "unsatisfiedConstraints",
+        7:  "illegalOperation",
+        8:  "protocolError",
+        9:  "timeExpired",
+        10: "interrupted",
+        11: "noFileOrDirectory",
+        12: "invalidArgument",
+        13: "permissionDenied",
+        14: "resourceExhausted",
+        15: "inappropriateType",
+        16: "noSuchThing",
+        17: "unexpectedEof",
+        18: "userError",
+    }
+
+    def _string_field(self, ptr: Any, idx: int) -> str:
+        """Decode field `idx` of `ptr` as a Lean string (best effort)."""
+        try:
+            s_ptr = _ctor_get(self.ffi, ptr, idx)
+            self.ffi.lean_inc(s_ptr)
+            s = self._lean_string_to_py(s_ptr)
+            self.ffi.lean_dec(s_ptr)
+            return s
+        except Exception:
+            return ""
+
+    def _build_io_exception(self, ptr: Any) -> "Exception":
+        """Decode an `IO.Error` ctor pointer into a typed exception.
+
+        For `userError` — the most common, used by every `LeanPy.Python.*`
+        bridge function on Python failure — the message has the form
+        `"<TypeName>: <message>"` (built in `python_bridge.c::raise_py_error`).
+        We reconstruct that as a `LeanPyCallbackError` so the original
+        Python exception type is visible. Other ctors map to `LeanError`
+        with the appropriate `kind`.
+        """
+        from lean_py.exceptions import (
+            LeanError, LeanPyCallbackError, parse_io_error_message,
+        )
+
         try:
             tag = _ctor_tag(self.ffi, ptr)
-            # `IO.Error.userError s` is ctor with one String field;
-            # other ctors have varying shapes — just fall back to repr.
-            if tag == 0 or tag == 11:
-                # Try field 0 as a string.
-                try:
-                    s_ptr = _ctor_get(self.ffi, ptr, 0)
-                    self.ffi.lean_inc(s_ptr)
-                    s = self._lean_string_to_py(s_ptr)
-                    self.ffi.lean_dec(s_ptr)
-                    return s
-                except Exception:
-                    pass
-            return f"<IO.Error tag={tag}>"
+        except Exception:
+            return LeanError("unknown", "<unprintable IO.Error>")
+
+        kind = self._IO_ERROR_TAGS.get(tag, f"tag{tag}")
+
+        # The first ctor field of every IO.Error variant is either a
+        # String (filename / message) or a Nat — read it as best we can.
+        field0 = self._string_field(ptr, 0)
+
+        # `userError s` is the boundary case: payload is the user-supplied
+        # string. The bridge encodes Python errors here.
+        if kind == "userError":
+            ptype, pmsg = parse_io_error_message(field0)
+            if ptype:
+                return LeanPyCallbackError(ptype, pmsg)
+            return LeanError("userError", field0 or "<no message>")
+
+        # Other ctors carry varying field shapes. Capture field0 as the
+        # primary descriptor and leave a structured `context` so callers
+        # can still access it.
+        return LeanError(kind, field0 or f"<{kind} (no message)>",
+                         context={"raw_field0": field0} if field0 else None)
+
+    def _format_io_error(self, ptr: Any) -> str:
+        """Legacy stringification — preserved for callers that just want
+        a printable error message. Use `_build_io_exception` for typed
+        exceptions."""
+        try:
+            return str(self._build_io_exception(ptr))
         except Exception:
             return "<unprintable IO.Error>"

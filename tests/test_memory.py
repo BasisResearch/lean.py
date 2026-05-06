@@ -95,3 +95,33 @@ def test_leanobj_handle_dropping(example_lib):
         wrapper = LeanObj(s)
         del wrapper
     gc.collect()
+
+
+def test_lean_expr_round_trip_no_leak(example_lib):
+    """Round-trip Lean.Expr ADT values 2k times. Catches refcount issues
+    in the new recursive-type marshalling (Phase 3a)."""
+    Name = example_lib.Name
+    Expr = example_lib.Expr
+    f_name = Name.str(Name.str(Name.anonymous, "Nat"), "succ")
+    x_name = Name.str(Name.str(Name.anonymous, "Nat"), "zero")
+    f = Expr.const(f_name, [])
+    x = Expr.const(x_name, [])
+    e = Expr.app(f, x)
+    gc.collect()
+    for _ in range(2_000):
+        s = example_lib.py_expr_describe(e)
+        assert s == "app (const Nat.succ) (const Nat.zero)"
+    gc.collect()
+
+
+def test_pyobject_round_trip_no_pyref_leak(example_lib):
+    """Stress the live pyobject round-trip (Phase 3b). Each call
+    decrements a Lean-held PyObject and we want the CPython refcount
+    on a sentinel to stay stable."""
+    sentinel = ("leanpy-pyobj-sentinel",) * 8
+    base_rc = sys.getrefcount(sentinel)
+    for _ in range(1_000):
+        py_list = example_lib.makeList123(None)
+        assert py_list == [1, 2, 3]
+    gc.collect()
+    assert sys.getrefcount(sentinel) == base_rc

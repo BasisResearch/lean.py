@@ -191,6 +191,23 @@ static PyObject *unwrap_pyobject(b_lean_obj_arg obj) {
     return (PyObject *)lean_get_external_data(obj);
 }
 
+/* Python-side helper: extract the wrapped `PyObject*` from a Lean
+ * external-class handle. Bumps the Python refcount so the caller
+ * receives an owned reference. The Lean handle's own reference is
+ * untouched. Returns NULL if `obj` is not a wrapped PyObject (e.g.
+ * a different external class, or initialisation hasn't happened).
+ *
+ * Used by `lean_py.marshal` to convert a `Py` handle returned from
+ * Lean into a live Python object the caller can use directly. */
+LEAN_EXPORT void * leanpy_unwrap_pyobject(b_lean_obj_arg obj) {
+    if (!py_initialized) return NULL;
+    if (!lean_is_external(obj)) return NULL;
+    PyObject *o = unwrap_pyobject(obj);
+    if (!o) return NULL;
+    p_Py_IncRef(o);
+    return (void *)o;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Error mapping                                                      */
 /* ------------------------------------------------------------------ */
@@ -703,4 +720,28 @@ LEAN_EXPORT lean_obj_res lean_py_pow(b_lean_obj_arg a, b_lean_obj_arg b, lean_ob
 LEAN_EXPORT lean_obj_res lean_py_neg(b_lean_obj_arg a, lean_obj_arg world) {
     (void)world; ENSURE_INIT();
     return ok_owned_or_err(p_PyNumber_Negative(unwrap_pyobject(a)));
+}
+
+/* ------------------------------------------------------------------ */
+/*  Lean closures as Python callables                                   */
+/*                                                                    */
+/*  The full implementation builds a Python heap type whose tp_call    */
+/*  trampolines into a stored Lean closure. Until that's wired (see   */
+/*  Phase 3c of the plan), these stubs return a clear runtime error.   */
+/* ------------------------------------------------------------------ */
+
+LEAN_EXPORT lean_obj_res leanpy_make_callable(lean_obj_arg closure, lean_obj_arg world) {
+    (void)world;
+    lean_dec(closure);
+    return raise_io_error(
+        "LeanPy.Python.Py.fromLeanCallable: not yet implemented "
+        "(see plan phase 3c)");
+}
+
+LEAN_EXPORT lean_obj_res leanpy_make_callable_kw(lean_obj_arg closure, lean_obj_arg world) {
+    (void)world;
+    lean_dec(closure);
+    return raise_io_error(
+        "LeanPy.Python.Py.fromLeanCallableKw: not yet implemented "
+        "(see plan phase 3c)");
 }

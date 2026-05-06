@@ -48,6 +48,7 @@ partial def typeToRepr (env : Environment) (e : Expr) : TypeRepr :=
     | ``Int16     => .sint 16
     | ``Int32     => .sint 32
     | ``Int64     => .sint 64
+    | `LeanPy.Python.Py => .pyobject
     | _ =>
       if (Registry.findType? env n).isSome then .named n
       else .opaque n
@@ -156,11 +157,25 @@ def buildTypeInfo (env : Environment) (n : Name) : MetaM TypeInfo := do
     ctors := ctors.push { name := cname', tag := idx, fields }
   return { name := n, isStructure, isEnum, ctors }
 
-/-- Add a type to the registry, throwing if already present. -/
+/-- Add a type to the registry. To allow recursive `derive_python` (where
+a type references itself in one of its constructors), we first register
+a *placeholder* `TypeInfo` containing only the name; this lets the
+`typeToRepr` lookup classify recursive uses as `.named` rather than
+`.opaque`. We then run `buildTypeInfo` against the now-extended
+environment and overwrite the placeholder with the full info. -/
 def doRegisterType (n : Name) : CommandElabM Unit := do
   let env ← getEnv
-  if (Registry.findType? env n).isSome then return ()
-  let info ← liftTermElabM <| Lean.Meta.MetaM.run' (buildTypeInfo env n)
+  if let some existing := Registry.findType? env n then
+    -- An entry already exists. If it's a placeholder (no ctors), we
+    -- still need to compute the real one and add it; otherwise return.
+    if !existing.ctors.isEmpty then return ()
+  else
+    -- 1. Register a name-only placeholder so recursive lookups succeed.
+    let placeholder : TypeInfo := { name := n }
+    modifyEnv (Registry.addType · placeholder)
+  -- 2. Now compute the real `TypeInfo` against the extended env.
+  let info ← liftTermElabM <| Lean.Meta.MetaM.run' (buildTypeInfo (← getEnv) n)
+  -- 3. Overwrite the placeholder with the real info.
   modifyEnv (Registry.addType · info)
 
 /-- The `derive_python` command. -/

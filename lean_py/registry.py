@@ -130,9 +130,36 @@ class LibraryRegistry:
     def from_json_strings(cls, funcs_json: str, types_json: str) -> "LibraryRegistry":
         farr = json.loads(funcs_json) if funcs_json else []
         tarr = json.loads(types_json) if types_json else []
+        # Dedupe types by name. `derive_python` for recursive inductives
+        # adds two entries: a name-only placeholder (so self-references
+        # resolve to `.named`), and the real `TypeInfo` with the full
+        # constructor list. The order in the JSON depends on whether
+        # the type comes from the importing module or a downstream
+        # derive_python — both orderings can occur. To handle both
+        # cases we keep the entry with the most constructors.
+        best: dict[str, TypeInfo] = {}
+        order: list[str] = []
+        for raw in tarr:
+            ti = TypeInfo.from_json(raw)
+            if ti.name not in best:
+                order.append(ti.name)
+                best[ti.name] = ti
+            elif len(ti.ctors) > len(best[ti.name].ctors):
+                best[ti.name] = ti
+        deduped_types: list[TypeInfo] = [best[n] for n in order]
+
+        seen_fn: set[str] = set()
+        deduped_funcs: list[FuncInfo] = []
+        for raw in farr:
+            fi = FuncInfo.from_json(raw)
+            if fi.exportName in seen_fn:
+                continue
+            seen_fn.add(fi.exportName)
+            deduped_funcs.append(fi)
+
         return cls(
-            funcs=tuple(FuncInfo.from_json(f) for f in farr),
-            types=tuple(TypeInfo.from_json(t) for t in tarr),
+            funcs=tuple(deduped_funcs),
+            types=tuple(deduped_types),
         )
 
     def find_type(self, name: str) -> TypeInfo | None:

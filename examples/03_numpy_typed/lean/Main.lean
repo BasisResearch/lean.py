@@ -12,6 +12,8 @@ def runDemo : IO Unit := do
   let d ← NDArray.reshape c [6]           -- proof discharged by `decide`
   IO.println s!"  {← d.repr}"
 
+#eval runDemo
+
 /-- A "real" computation: build `[1.0 ... 6.0]`, reshape to `(2, 3)`,
 multiply with its transpose to get `(2, 2)`, and add `ones (2, 2)`.
 The reshaped result is read back as an `Array Float`. -/

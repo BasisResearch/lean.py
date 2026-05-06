@@ -71,19 +71,23 @@ def colorId (c : Color) : Int :=
   | .green => 1
   | .blue => 2
 
-/-! ### Python-in-Lean smoke tests -/
+/-! ### Python-in-Lean smoke tests
+
+These exercise the new (Phase 1) dot-syntax form: operations on `Py`
+values now resolve through `Py.<op>` so `pyVal.getAttr "..."` works
+just like a method call. -/
 
 open LeanPy.Python in
 @[python "py_python_eval_int"]
 def pythonEvalInt (src : String) : IO Int := do
   init ()
-  toInt (← eval src)
+  (← eval src).toInt
 
 open LeanPy.Python in
 @[python "py_python_eval_str"]
 def pythonEvalStr (src : String) : IO String := do
   init ()
-  str (← eval src)
+  (← eval src).str
 
 
 open LeanPy.Python in
@@ -91,8 +95,11 @@ open LeanPy.Python in
 def pythonCall1Int (mod : String) (fn : String) (arg : Int) : IO Int := do
   init ()
   let m ← import_ mod
-  let f ← getAttr m fn
-  toInt (← call f #[← ofInt64 arg])
+  -- exercise dot-syntax chains: m.getAttr → returned Py is `f`,
+  -- then f.call yields a Py whose `.toInt` we read.
+  let f ← m.getAttr fn
+  let r ← f.call #[← Py.ofInt64 arg]
+  r.toInt
 
 /-! ### sympy / numpy demos used by the test suite -/
 
@@ -101,20 +108,110 @@ open LeanPy.Python in
 def sympySimplify (expr : String) : IO String := do
   init ()
   let sympy ← import_ "sympy"
-  let simplify ← getAttr sympy "simplify"
-  str (← call simplify #[← ofString expr])
+  let result ← (← sympy.getAttr "simplify").call #[← Py.ofString expr]
+  result.str
 
 open LeanPy.Python in
 @[python "py_numpy_sum"]
 def numpySum (xs : Array Int) : IO Int := do
   init ()
   let np ← import_ "numpy"
-  let arrayFn ← getAttr np "array"
+  let arrayFn ← np.getAttr "array"
   let mut pylist : Array LeanPy.Python.Py := #[]
   for x in xs do
-    pylist := pylist.push (← ofInt64 x)
-  let arr ← call arrayFn #[← ofList pylist]
-  let res ← call (← getAttr arr "sum") #[]
-  toInt (← call (← getAttr res "item") #[])
+    pylist := pylist.push (← Py.ofInt64 x)
+  let arr ← arrayFn.call #[← Py.ofList pylist]
+  let res ← arr.callMethod "sum" #[]
+  (← res.callMethod "item" #[]).toInt
+
+/-! ### Phase 3: bidirectional introspection fixtures -/
+
+open Lean
+
+/-- Build a `Lean.Name` from Lean code. Python should be able to decode
+this as a `Name.str (Name.str Name.anonymous "foo") "bar"`. -/
+@[python "py_make_name"]
+def makeName (_ : Unit) : Lean.Name :=
+  .str (.str .anonymous "foo") "bar"
+
+/-- Round-trip a `Name`: Python builds it, hands it to us, we render. -/
+@[python "py_name_to_string"]
+def nameToString (n : Lean.Name) : String := n.toString
+
+/-- Build an `Lean.Expr.app f x` from Lean. Python should see the full
+constructor structure. -/
+@[python "py_make_app_expr"]
+def makeAppExpr (_ : Unit) : Lean.Expr :=
+  .app (.const `Nat.succ []) (.const `Nat.zero [])
+
+/-- Read a Lean.Expr's app args; expects an `app` ctor and returns the
+applied function and argument as strings. -/
+@[python "py_expr_describe"]
+def exprDescribe (e : Lean.Expr) : String :=
+  match e with
+  | .const n _ => s!"const {n}"
+  | .app f x   => s!"app ({exprDescribe f}) ({exprDescribe x})"
+  | .lit (.natVal n) => s!"natLit {n}"
+  | .lit (.strVal s) => s!"strLit {s.length}"
+  | _ => "<other>"
+
+/-! ### Phase 3b: live `Py` round-trip fixture -/
+
+open LeanPy.Python in
+/-- Builds a Python list `[1, 2, 3]` in Lean and returns it as a `Py`.
+The Python wrapper should decode this as a real `list`, not an opaque
+`LeanObj`. -/
+@[python "py_make_list_123"]
+def makeList123 (_ : Unit) : IO Py := do
+  init ()
+  let xs ← #[1, 2, 3].mapM Py.ofInt64
+  Py.ofList xs
+
+/-! ### Phase 4: Python ↔ Lean exception support fixtures -/
+
+open LeanPy.Python in
+/-- Try a Python eval; on failure return a sentinel string carrying the
+caught Python exception's type and message. Used by tests/test_exceptions.py. -/
+@[python "py_eval_or_describe_error"]
+def evalOrDescribeError (src : String) : IO String := do
+  init ()
+  tryCatchPy
+    (do let r ← eval src; r.str)
+    (fun e => return s!"caught:{e.typeName}:{e.message}")
+
+open LeanPy.Python in
+/-- Raise a Lean-level IO error. The Python wrapper should see this as a
+typed `LeanError(kind="userError", ...)`. -/
+@[python "py_lean_panic"]
+def leanPanic (msg : String) : IO Unit := do
+  throw (IO.userError msg)
+
+open LeanPy.Python in
+/-- Reraise a Python exception verbatim (no `tryCatch`). Used to verify
+the typed `LeanPyCallbackError` decoding on the Python side. -/
+@[python "py_propagate_python_error"]
+def propagatePythonError (src : String) : IO String := do
+  init ()
+  let r ← eval src
+  r.str
+
+/-! ### Phase 1: dot-syntax compilability checks
+
+These functions exist so the build catches regressions if dot-syntax
+on `Py` ever stops resolving. They are not invoked from the test suite
+but their compilation is the test. -/
+
+open LeanPy.Python in
+@[python "py_dot_syntax_smoke"]
+def dotSyntaxSmoke (_ : Unit) : IO String := do
+  init ()
+  let mod ← import_ "math"
+  let pi ← mod.getAttr "pi"
+  let cos ← mod.getAttr "cos"
+  let zero ← Py.ofFloat 0.0
+  let r ← cos.call #[zero]
+  -- chain: r.add(pi).mul(pi).repr — exercise method-style binding
+  let s ← (← (← r.add pi).mul pi).repr
+  return s
 
 #export_python_registry "TestLib"

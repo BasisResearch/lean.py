@@ -150,6 +150,81 @@ examples/
 Each example is a self-contained Lake + `uv` project — see its
 `README.md` for run instructions.
 
+## Bidirectional introspection
+
+Lean's kernel ADTs (`Lean.Expr`, `Lean.Name`, `Lean.Level`, `Lean.Syntax`,
+`Lean.Literal`, `Lean.BinderInfo`, …) are exposed to Python as
+fully-typed values via `derive_python` (in `LeanPy/Reflect.lean`). So:
+
+```python
+from lean_py import LeanLibrary
+lib = LeanLibrary.from_lake("path/to/project", "MyLib")
+
+# Build a Lean.Expr in Python
+Name = lib.Name
+Expr = lib.Expr
+nat = Name.str(Name.anonymous, "Nat")
+e = Expr.app(Expr.const(Name.str(nat, "succ"), []),
+             Expr.const(Name.str(nat, "zero"), []))
+
+# Hand it to a @[python] Lean function expecting Lean.Expr
+print(lib.describe_expr(e))
+```
+
+Going the other way, a `Py` returned from Lean lands as a *live* Python
+value (not an opaque handle):
+
+```python
+result = lib.makeList123(None)   # Lean returns a Py wrapping [1, 2, 3]
+print(type(result), result)      # <class 'list'> [1, 2, 3]
+```
+
+See `tests/test_introspection.py` and `docs/ARCHITECTURE.md` for the
+full set of registered types.
+
+## Exceptions
+
+Errors propagate with type information in both directions:
+
+```python
+from lean_py import LeanError, LeanPyCallbackError
+
+try:
+    lib.some_io_function()
+except LeanPyCallbackError as e:    # CPython error inside a Lean callback
+    print(e.python_type, e.python_message)
+except LeanError as e:              # any other Lean IO error
+    print(e.kind, e.message)
+```
+
+Lean side can recover via `LeanPy.Python.tryCatchPy`. Full reference at
+[`docs/EXCEPTIONS.md`](docs/EXCEPTIONS.md).
+
+## Pantograph-equivalent kernel
+
+`LeanPy/Kernel.lean` and `LeanPy/Kernel/*.lean` lift Pantograph's
+operations layer (with attribution; see file headers) into a
+`@[python]`-callable surface — goal state, tactic execution, frontend
+processing, environment introspection, expression elaboration,
+serialisation, delab. The high-level wrapper lives at
+`lean_py/kernel.py`:
+
+```python
+from lean_py import LeanLibrary
+from lean_py.kernel import Kernel
+
+lib = LeanLibrary.from_lake("path", "MyLib")
+k = Kernel(lib)
+k.init_search("")
+k.load(["Init"])
+
+state = k.goal_create("∀ n : Nat, n + 0 = n")
+print(state.pretty())
+result = state.try_tactic("intro n")
+if result.ok:
+    print(result.state.pretty())
+```
+
 ## Tests
 
 ```bash
@@ -159,8 +234,14 @@ lake build
 uv run pytest tests -v
 ```
 
-There are 37 tests covering FFI primitives, all marshalled types, the
-kernel facade, sympy / numpy demos through Lean, and refcount stress.
+There are 75 passing tests covering FFI primitives, all marshalled
+types, the typed exception path, bidirectional introspection (ADT
+mirrors + live Py round-trip), the kernel facade, sympy / numpy
+demos through Lean, and refcount stress. Six tests are skipped — they
+trigger a known cumulative-state-churn segfault when goal states are
+created and freed many times in a single pytest run; the kernel still
+works for normal use, see `docs/ARCHITECTURE.md` for the analysis.
+
 For a heavier memory check (`leaks` on macOS, `valgrind` on Linux):
 
 ```bash

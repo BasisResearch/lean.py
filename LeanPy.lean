@@ -14,3 +14,4 @@ import LeanPy.Attr
 import LeanPy.Export
 import LeanPy.Python
 import LeanPy.Kernel
+import LeanPy.Reflect

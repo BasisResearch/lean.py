@@ -58,40 +58,40 @@ private def numpy : IO Py := do
   import_ "numpy"
 
 private def pyShapeOf (shape : List Nat) : IO Py := do
-  let arr ← shape.toArray.mapM (fun n => ofInt64 (Int.ofNat n))
-  ofTuple arr
+  let arr ← shape.toArray.mapM (fun n => Py.ofInt64 (Int.ofNat n))
+  Py.ofTuple arr
 
 private def pyDTypeOf (dt : DType) : IO Py := do
   let np ← numpy
-  getAttr np dt.numpyName
+  np.getAttr dt.numpyName
 
 /-! ### Constructors -/
 
 /-- `numpy.zeros(shape, dtype=dt)`. The result type pins both. -/
 def NDArray.zeros (dt : DType) (shape : List Nat) : IO (NDArray dt shape) := do
   let np ← numpy
-  let zerosFn ← getAttr np "zeros"
+  let zerosFn ← np.getAttr "zeros"
   let pyShape ← pyShapeOf shape
   let pyDT ← pyDTypeOf dt
-  let result ← callKw zerosFn #[pyShape] #[("dtype", pyDT)]
+  let result ← zerosFn.callKw #[pyShape] #[("dtype", pyDT)]
   return ⟨result⟩
 
 /-- `numpy.ones(shape, dtype=dt)`. -/
 def NDArray.ones (dt : DType) (shape : List Nat) : IO (NDArray dt shape) := do
   let np ← numpy
-  let onesFn ← getAttr np "ones"
+  let onesFn ← np.getAttr "ones"
   let pyShape ← pyShapeOf shape
   let pyDT ← pyDTypeOf dt
-  let result ← callKw onesFn #[pyShape] #[("dtype", pyDT)]
+  let result ← onesFn.callKw #[pyShape] #[("dtype", pyDT)]
   return ⟨result⟩
 
 /-- `numpy.arange(0, n, dtype=dt)`. The result is a 1-D array of length `n`. -/
 def NDArray.arange (dt : DType) (n : Nat) : IO (NDArray dt [n]) := do
   let np ← numpy
-  let arangeFn ← getAttr np "arange"
-  let stop ← ofInt64 (Int.ofNat n)
+  let arangeFn ← np.getAttr "arange"
+  let stop ← Py.ofInt64 (Int.ofNat n)
   let pyDT ← pyDTypeOf dt
-  let result ← callKw arangeFn #[stop] #[("dtype", pyDT)]
+  let result ← arangeFn.callKw #[stop] #[("dtype", pyDT)]
   return ⟨result⟩
 
 /-! ### Operations — typed against the phantom shape -/
@@ -102,26 +102,26 @@ def NDArray.matmul {dt : DType} {m k n : Nat}
     (a : NDArray dt [m, k]) (b : NDArray dt [k, n]) :
     IO (NDArray dt [m, n]) := do
   let np ← numpy
-  let matmulFn ← getAttr np "matmul"
-  let result ← call matmulFn #[a.pyref, b.pyref]
+  let matmulFn ← np.getAttr "matmul"
+  let result ← matmulFn.call #[a.pyref, b.pyref]
   return ⟨result⟩
 
 /-- Element-wise sum. Same dtype, same shape — the type checker enforces both. -/
 def NDArray.add {dt : DType} {shape : List Nat}
     (a b : NDArray dt shape) : IO (NDArray dt shape) := do
-  let result ← LeanPy.Python.add a.pyref b.pyref
+  let result ← a.pyref.add b.pyref
   return ⟨result⟩
 
 /-- Element-wise product. Same dtype, same shape. -/
 def NDArray.mul {dt : DType} {shape : List Nat}
     (a b : NDArray dt shape) : IO (NDArray dt shape) := do
-  let result ← LeanPy.Python.mul a.pyref b.pyref
+  let result ← a.pyref.mul b.pyref
   return ⟨result⟩
 
 /-- Transpose a 2-D array. Output shape is the swap. -/
 def NDArray.transpose {dt : DType} {m n : Nat}
     (a : NDArray dt [m, n]) : IO (NDArray dt [n, m]) := do
-  let result ← getAttr a.pyref "T"
+  let result ← a.pyref.getAttr "T"
   return ⟨result⟩
 
 /-- Reshape, with a proof obligation that total element count is preserved.
@@ -130,26 +130,25 @@ def NDArray.reshape {dt : DType} {old : List Nat} (a : NDArray dt old)
     (new : List Nat) (_h : shapeSize old = shapeSize new := by decide) :
     IO (NDArray dt new) := do
   let np ← numpy
-  let reshapeFn ← getAttr np "reshape"
+  let reshapeFn ← np.getAttr "reshape"
   let pyShape ← pyShapeOf new
-  let result ← call reshapeFn #[a.pyref, pyShape]
+  let result ← reshapeFn.call #[a.pyref, pyShape]
   return ⟨result⟩
 
 /-- Render the underlying numpy array. -/
 def NDArray.repr {dt : DType} {shape : List Nat}
     (a : NDArray dt shape) : IO String :=
-  LeanPy.Python.repr a.pyref
+  a.pyref.repr
 
 /-- Read out a 1-D float64 array as `Array Float`. Useful in tests. -/
 def NDArray.toArray {n : Nat} (a : NDArray .f64 [n]) : IO (Array Float) := do
-  let tolist ← getAttr a.pyref "tolist"
-  let pyList ← call tolist #[]
-  let len ← length pyList
+  let pyList ← a.pyref.callMethod "tolist" #[]
+  let len ← pyList.length
   let mut acc : Array Float := Array.mkEmpty len.toNat
   for i in [:len.toNat] do
-    let idx ← ofInt64 (Int.ofNat i)
-    let item ← getItem pyList idx
-    acc := acc.push (← toFloat item)
+    let idx ← Py.ofInt64 (Int.ofNat i)
+    let item ← pyList.getItem idx
+    acc := acc.push (← item.toFloat)
   return acc
 
 end TypedNumpy

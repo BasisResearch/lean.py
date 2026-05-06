@@ -2,9 +2,10 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  # Run the full test suite on Linux + macOS, against multiple Lean
-  # toolchain versions. The repo's `lean-toolchain` file pins one but we
-  # additionally test the latest stable + nightly to catch regressions.
+  # Run the full test suite on Linux + macOS using the pinned Lean
+  # toolchain. The lifted Pantograph kernel code in LeanPy/Kernel/*
+  # depends on 4.29-era APIs, so multi-toolchain matrix testing is
+  # currently disabled — re-introduce when the kernel surface stabilises.
   test:
     strategy:
       fail-fast: false
@@ -12,8 +13,6 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         toolchain:
           - "default"            # whatever lean-toolchain pins
-          - "leanprover/lean4:v4.25.0"
-          - "leanprover/lean4:nightly"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

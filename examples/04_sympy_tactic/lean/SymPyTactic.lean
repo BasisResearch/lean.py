@@ -35,33 +35,33 @@ axiom sympy_oracle (p : Prop) : p
 def sympySimplify (expr : String) : IO String := do
   init ()
   let sympy ← import_ "sympy"
-  let f ← getAttr sympy "simplify"
-  str (← call f #[← ofString expr])
+  let r ← (← sympy.getAttr "simplify").call #[← Py.ofString expr]
+  r.str
 
 @[python "sympy_accept"]
 def sympyAccept (prop : String) : IO Bool := do
   init ()
   let sympy ← import_ "sympy"
-  let parse ← getAttr sympy "sympify"
-  let simplify ← getAttr sympy "simplify"
-  let p ← call parse #[← ofString prop]
-  let s ← call simplify #[p]
-  let trueObj ← call parse #[← ofString "True"]
-  eq s trueObj
+  let parse ← sympy.getAttr "sympify"
+  let simplify ← sympy.getAttr "simplify"
+  let p ← parse.call #[← Py.ofString prop]
+  let s ← simplify.call #[p]
+  let trueObj ← parse.call #[← Py.ofString "True"]
+  s.eq trueObj
 
 /-- True iff `simplify(lhs - rhs) == 0`. -/
 @[python "sympy_eq_accept"]
 def sympyEqAccept (lhs rhs : String) : IO Bool := do
   init ()
   let sympy ← import_ "sympy"
-  let parse ← getAttr sympy "sympify"
-  let simplify ← getAttr sympy "simplify"
-  let l ← call parse #[← ofString lhs]
-  let r ← call parse #[← ofString rhs]
-  let diff ← sub l r
-  let s ← call simplify #[diff]
-  let zero ← call parse #[← ofString "0"]
-  eq s zero
+  let parse ← sympy.getAttr "sympify"
+  let simplify ← sympy.getAttr "simplify"
+  let l ← parse.call #[← Py.ofString lhs]
+  let r ← parse.call #[← Py.ofString rhs]
+  let diff ← l.sub r
+  let s ← simplify.call #[diff]
+  let zero ← parse.call #[← Py.ofString "0"]
+  s.eq zero
 
 /-! ### The `sympy` tactic -/
 
