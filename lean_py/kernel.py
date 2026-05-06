@@ -145,8 +145,8 @@ class GoalState:
         return TacticResult.parse(encoded, self._kernel, next_state)
 
     def try_draft(self, expr_str: str) -> TacticResult:
-        """Substitute the goal with an expression that may contain ``sorry``s,
-        leaving the sorries as fresh subgoals."""
+        """Substitute the goal with an expression that may contain sorrys,
+        leaving the sorrys as fresh subgoals."""
         encoded, next_state = self._kernel._lib.leanpy_kernel_goal_try_draft(
             self._handle, expr_str,
         )
@@ -365,8 +365,9 @@ class Kernel:
 
     def process(self, source: str) -> str:
         """Process Lean source code against the current environment.
+
         Returns a multi-line string of new constants per command, separated by
-        ``\n---\n``."""
+        ``\\n---\\n``."""
         return self._lib.leanpy_kernel_frontend_process(source)
 
     def collect_sorrys(self, source: str) -> tuple[GoalState | None, str]:

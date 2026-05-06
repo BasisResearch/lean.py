@@ -13,3 +13,4 @@ refs/
 .cache/
 _examples/
 .pytest_cache/
+docs/build/
