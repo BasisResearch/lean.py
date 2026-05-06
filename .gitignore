@@ -1,5 +1,8 @@
 **/.lake
 *.egg-info
+# Emacs / editor scratch
+\#*\#
+.\#*
 dist/
 .mypy_cache/*
 .lake/*
