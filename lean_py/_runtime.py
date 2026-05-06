@@ -206,6 +206,22 @@ def _build_ffi_class(model: HeaderModel, structs: dict[str, type]) -> type:
         if not _ffi_initialized:
             _ffi_initialized = True
             self.lean_initialize()
+        # `lean_io_mark_end_initialization` flips the global
+        # `g_initializing` flag in the Lean runtime from true to false.
+        # Without it, any Lean code path that calls
+        # `mkEmptyEnvironment` (e.g. `parseHeader`, used by the
+        # frontend's `createContextStateFromFile`) raises
+        # `"environment objects cannot be created during
+        # initialization"`. We expose it as a method so user-library
+        # init code can run with the flag still true (which is required
+        # by Lean's `initialize` blocks), then flip it after.
+        try:
+            self.lean_io_mark_end_initialization = \
+                self.lib.lean_io_mark_end_initialization
+            self.lean_io_mark_end_initialization.argtypes = []
+            self.lean_io_mark_end_initialization.restype = None
+        except AttributeError:
+            self.lean_io_mark_end_initialization = None  # type: ignore[assignment]
 
     def register_handle(self, lib):
         """Register an additional dlopen handle as a source of symbols

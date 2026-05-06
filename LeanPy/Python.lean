@@ -178,6 +178,24 @@ opaque fromLeanCallableKw : (@& Array Py → @& Array (String × Py) → IO Py) 
 
 end Py
 
+/-! ## Convenience instances and notation
+
+These let downstream code write Python operations the way they look in
+Python: `p.x` for `Py.getAttr p "x"`, `p[k]` for `Py.getItem p k`, plus
+arithmetic operator overloading via the standard typeclasses (lifted
+into `IO`). Because every Py op runs in `IO`, the operator instances
+are necessarily monadic — see the `Pyo` notation below for a more
+fluent option. -/
+
+namespace Py
+
+/-- Coerce any `Py` to a `String` by calling Python's `str(...)`.
+This is monadic (`IO`) — the actual `instance : ToString Py` would
+have to dispatch on the runtime, which we can't do without IO. -/
+def display (p : Py) : IO String := p.str
+
+end Py
+
 /-! ## Exception handling
 
 Python exceptions raised inside a `LeanPy.Python.*` call surface as

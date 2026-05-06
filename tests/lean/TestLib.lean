@@ -214,4 +214,100 @@ def dotSyntaxSmoke (_ : Unit) : IO String := do
   let s ← (← (← r.add pi).mul pi).repr
   return s
 
+/-! ### Phase 3d: Expr-based Lean→Python interop -/
+
+/-- A Lean.Expr that's been received as an argument from Python (the
+Python caller built it via `lib.Expr.const(...)` etc.) is round-trippable
+unchanged. Returns its `.toString` rendering. -/
+@[python "py_expr_round_trip_to_string"]
+def exprRoundTripToString (e : Lean.Expr) : String := e.dbgToString
+
+/-- Render a Lean.Expr passed from Python as a structural string —
+demonstrates that we can do per-constructor pattern matching on an
+Expr that originated as a `LeanInductiveValue` in Python. -/
+@[python "py_expr_structural_summary"]
+partial def exprStructuralSummary : Lean.Expr → String
+  | .const n _ => s!"const({n})"
+  | .app f x => s!"app({exprStructuralSummary f}, {exprStructuralSummary x})"
+  | .lam _ ty body _ => s!"lam(_, {exprStructuralSummary ty}, {exprStructuralSummary body})"
+  | .bvar i => s!"bvar({i})"
+  | .lit (.natVal n) => s!"nat({n})"
+  | .lit (.strVal s) => s!"str({s})"
+  | _ => "<other>"
+
+/-! ### Phase 3c: Lean closures as Python callables
+
+These fixtures expose Lean closures to Python via `Py.fromLeanCallable`
+and `Py.fromLeanCallableKw`. The Python side calls the returned object
+like any other callable; the closure runs in IO. -/
+
+open LeanPy.Python in
+/-- Wrap a Lean function `Array Py → IO Py` that sums its int args. -/
+@[python "py_make_lean_sum_callable"]
+def makeLeanSumCallable (_ : Unit) : IO Py := do
+  init ()
+  Py.fromLeanCallable fun args => do
+    let mut total : Int := 0
+    for a in args do
+      total := total + (← a.toInt)
+    Py.ofInt64 total
+
+open LeanPy.Python in
+/-- Wrap a Lean closure that returns its single argument's repr. -/
+@[python "py_make_lean_repr_callable"]
+def makeLeanReprCallable (_ : Unit) : IO Py := do
+  init ()
+  Py.fromLeanCallable fun args => do
+    match h : args.size with
+    | 1 =>
+      have hLt : 0 < args.size := h ▸ Nat.zero_lt_one
+      Py.ofString (← args[0].repr)
+    | _ => throw (IO.userError s!"expected 1 arg, got {args.size}")
+
+open LeanPy.Python in
+/-- Closure that reads kwargs and returns
+`{ "args_count": n, "kwargs_keys": ["a", "b"] }`. Demonstrates the
+keyword-aware variant. -/
+@[python "py_make_lean_kw_callable"]
+def makeLeanKwCallable (_ : Unit) : IO Py := do
+  init ()
+  Py.fromLeanCallableKw fun args kwargs => do
+    let n := args.size
+    let keys := kwargs.map (·.fst)
+    let mut keyPyList : Array Py := #[]
+    for k in keys do
+      keyPyList := keyPyList.push (← Py.ofString k)
+    let keysPy ← Py.ofList keyPyList
+    Py.ofStringDict #[
+      ("args_count", ← Py.ofInt64 n),
+      ("kwargs_keys", keysPy)
+    ]
+
+open LeanPy.Python in
+/-- A closure that throws an IO error — the Python caller should see
+this as a `RuntimeError` whose message is the IO.userError payload. -/
+@[python "py_make_lean_failing_callable"]
+def makeLeanFailingCallable (_ : Unit) : IO Py := do
+  init ()
+  Py.fromLeanCallable fun _ => do
+    throw (IO.userError "intentional Lean failure from closure")
+
+open LeanPy.Python in
+/-- A Lean callback usable as a 3-arg setter: `(self, key, value) →
+self[key] = value*2`. The Python side will invoke it imperatively. -/
+@[python "py_make_doubling_setter"]
+def makeDoublingSetter (_ : Unit) : IO Py := do
+  init ()
+  Py.fromLeanCallable fun args => do
+    match h : args.size with
+    | 3 =>
+      let self := args[0]
+      let key := args[1]
+      let val := args[2]
+      let vint ← val.toInt
+      let doubled ← Py.ofInt64 (vint * 2)
+      self.setItem key doubled
+      Py.none ()
+    | _ => throw (IO.userError s!"expected 3 args, got {args.size}")
+
 #export_python_registry "TestLib"

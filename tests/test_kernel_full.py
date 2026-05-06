@@ -142,14 +142,12 @@ def test_goal_pretty(kernel):
     assert "Nat" in s
 
 
-@pytest.mark.skip(reason="cumulative state churn segfault — see docs/ARCHITECTURE.md")
 def test_goal_root_unsolved(kernel):
     state = kernel.leanpy_kernel_goal_create("∀ n : Nat, n + 0 = n")
     s = kernel.leanpy_kernel_goal_root_expr(state)
     assert isinstance(s, str)
 
 
-@pytest.mark.skip(reason="cumulative state churn segfault — see docs/ARCHITECTURE.md")
 def test_goal_try_tactic_success(kernel):
     state = kernel.leanpy_kernel_goal_create("∀ n : Nat, n + 0 = n")
     msg, next_state = kernel.leanpy_kernel_goal_try_tactic(state, "intro n")
@@ -159,7 +157,6 @@ def test_goal_try_tactic_success(kernel):
     assert kernel.leanpy_kernel_goal_n_goals(next_state) == 1
 
 
-@pytest.mark.skip(reason="cumulative state churn segfault — see docs/ARCHITECTURE.md")
 def test_goal_try_tactic_parse_error(kernel):
     state = kernel.leanpy_kernel_goal_create("∀ n : Nat, n = n")
     msg, next_state = kernel.leanpy_kernel_goal_try_tactic(state, "@@@@")
@@ -167,7 +164,6 @@ def test_goal_try_tactic_parse_error(kernel):
     assert next_state is None
 
 
-@pytest.mark.skip(reason="cumulative state churn segfault — see docs/ARCHITECTURE.md")
 def test_goal_try_assign(kernel):
     state = kernel.leanpy_kernel_goal_create("Nat")
     msg, next_state = kernel.leanpy_kernel_goal_try_assign(state, "(0 : Nat)")
@@ -176,14 +172,36 @@ def test_goal_try_assign(kernel):
     assert kernel.leanpy_kernel_goal_is_solved(next_state) is True
 
 
-def test_goal_state_is_reusable(kernel):
-    """A single GoalState handle can be used for multiple operations
-    in sequence (the marshaller bumps refcount per call)."""
-    # Known cumulative-refcount issue at high churn — see
-    # docs/ARCHITECTURE.md "GoalState lifecycle" section.
-    pytest.skip("cumulative state churn segfault — see docs/ARCHITECTURE.md")
+@pytest.mark.skip(reason=(
+    "Repeating basic field-projecting queries on a single GoalState is "
+    "fine in isolation but, after the rest of the kernel-extra suite has "
+    "run, the cumulative-churn issue makes even cheap reads crash. "
+    "Single-query versions (test_goal_main_goal_name, test_goal_pretty) "
+    "still cover the read paths."
+))
+def test_goal_state_basic_query_is_reusable(kernel):
+    state = kernel.leanpy_kernel_goal_create("∀ n : Nat, n = n")
+    name1 = kernel.leanpy_kernel_goal_main_goal_name(state)
+    name2 = kernel.leanpy_kernel_goal_main_goal_name(state)
+    assert name1 == name2
+    assert kernel.leanpy_kernel_goal_n_goals(state) == kernel.leanpy_kernel_goal_n_goals(state)
+    assert not kernel.leanpy_kernel_goal_is_solved(state)
 
 
+@pytest.mark.skip(reason=(
+    "Calling goal_pretty (or any op that runs Meta.MetaM.run') a second time "
+    "on the same GoalState segfaults. Tracked in docs/ARCHITECTURE.md "
+    "'GoalState lifecycle'. Workaround: create a fresh GoalState per query."
+))
+def test_goal_state_pretty_is_reusable(kernel):
+    state = kernel.leanpy_kernel_goal_create("∀ n : Nat, n = n")
+    s1 = kernel.leanpy_kernel_goal_pretty(state)
+    s2 = kernel.leanpy_kernel_goal_pretty(state)
+    assert s1 == s2
+
+
+@pytest.mark.skip(reason="cumulative state churn segfault — see docs/ARCHITECTURE.md")
 def test_goal_search(kernel):
     """`leanpy_kernel_search` filters declarations by substring."""
-    pytest.skip("cumulative state churn segfault — see docs/ARCHITECTURE.md")
+    s = kernel.leanpy_kernel_search("Nat.succ")
+    assert "Nat.succ" in s.split("\n")

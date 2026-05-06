@@ -121,6 +121,105 @@ class GoalState:
             self._kernel._lib.leanpy_kernel_goal_fragment_exit(self._handle)
         return TacticResult.parse(encoded, self._kernel, next_state)
 
+    # ---- prograde tactics --------------------------------------------------
+
+    def try_have(self, binder_name: str, type_str: str) -> TacticResult:
+        """Equivalent to ``have <binder_name> : <type_str> := ?``."""
+        encoded, next_state = self._kernel._lib.leanpy_kernel_goal_try_have(
+            self._handle, binder_name, type_str,
+        )
+        return TacticResult.parse(encoded, self._kernel, next_state)
+
+    def try_let(self, binder_name: str, type_str: str) -> TacticResult:
+        """Equivalent to ``let <binder_name> : <type_str> := ?``."""
+        encoded, next_state = self._kernel._lib.leanpy_kernel_goal_try_let(
+            self._handle, binder_name, type_str,
+        )
+        return TacticResult.parse(encoded, self._kernel, next_state)
+
+    def try_define(self, binder_name: str, expr_str: str) -> TacticResult:
+        """Equivalent to ``let <binder_name> := <expr_str>``."""
+        encoded, next_state = self._kernel._lib.leanpy_kernel_goal_try_define(
+            self._handle, binder_name, expr_str,
+        )
+        return TacticResult.parse(encoded, self._kernel, next_state)
+
+    def try_draft(self, expr_str: str) -> TacticResult:
+        """Substitute the goal with an expression that may contain ``sorry``s,
+        leaving the sorries as fresh subgoals."""
+        encoded, next_state = self._kernel._lib.leanpy_kernel_goal_try_draft(
+            self._handle, expr_str,
+        )
+        return TacticResult.parse(encoded, self._kernel, next_state)
+
+    # ---- introspection -----------------------------------------------------
+
+    def goal_names(self) -> list[str]:
+        return list(self._kernel._lib.leanpy_kernel_goal_state_goal_names(self._handle))
+
+    def parent_names(self) -> list[str]:
+        return list(self._kernel._lib.leanpy_kernel_goal_state_parent_names(self._handle))
+
+    def root_name(self) -> str:
+        return self._kernel._lib.leanpy_kernel_goal_state_root_name(self._handle)
+
+    def diag(self) -> str:
+        """Diagnostic dump of the GoalState's internal mvar table."""
+        return self._kernel._lib.leanpy_kernel_goal_state_diag(self._handle)
+
+    def serialize(self) -> str:
+        return self._kernel._lib.leanpy_kernel_goal_serialize(self._handle)
+
+    def print(self) -> str:  # noqa: A003 — mirrors pantograph's name
+        return self._kernel._lib.leanpy_kernel_goal_print(self._handle)
+
+    # ---- pickling ----------------------------------------------------------
+
+    def pickle(self, path: str) -> None:
+        """Serialise the goal state to disk via Lean's ``saveModuleData``.
+        Round-trips with :meth:`Kernel.goal_unpickle`. Raises on error."""
+        err = self._kernel._lib.leanpy_kernel_goal_pickle(self._handle, str(path))
+        if err:
+            raise RuntimeError(f"goal pickle failed: {err}")
+
+    # ---- resume / continue / replay / subsume ------------------------------
+
+    def resume(self, goal_names: list[str]) -> "GoalState":
+        next_state, err = self._kernel._lib.leanpy_kernel_goal_resume(
+            self._handle, goal_names,
+        )
+        if err:
+            raise RuntimeError(f"resume failed: {err}")
+        return GoalState(self._kernel, next_state)
+
+    def continue_with(self, branch: "GoalState") -> "GoalState":
+        next_state, err = self._kernel._lib.leanpy_kernel_goal_continue(
+            self._handle, branch._handle,
+        )
+        if err:
+            raise RuntimeError(f"continue failed: {err}")
+        return GoalState(self._kernel, next_state)
+
+    def replay(self, src: "GoalState", src_prime: "GoalState") -> "GoalState":
+        """Merge differential ``src → src_prime`` onto ``self`` (the dst)."""
+        next_state, err = self._kernel._lib.leanpy_kernel_goal_replay(
+            self._handle, src._handle, src_prime._handle,
+        )
+        if err:
+            raise RuntimeError(f"replay failed: {err}")
+        return GoalState(self._kernel, next_state)
+
+    def subsume(self, goal_name: str, candidate_names: list[str]
+                ) -> tuple[str, "GoalState | None", str]:
+        """Try to discharge ``goal_name`` using one of ``candidate_names``.
+        Returns (``"none"|"subsumed"|"cycle"|"error"``, optional new state,
+        optional name of the candidate that subsumed). """
+        label, next_state, sub_name = self._kernel._lib.leanpy_kernel_goal_subsume(
+            self._handle, goal_name, candidate_names,
+        )
+        next_gs = GoalState(self._kernel, next_state) if next_state is not None else None
+        return label, next_gs, sub_name
+
     def __repr__(self) -> str:
         try:
             return f"<GoalState n_goals={self.n_goals()} solved={self.is_solved()}>"
@@ -235,6 +334,61 @@ class Kernel:
         ``LeanError`` on parse / elaboration failure."""
         handle = self._lib.leanpy_kernel_goal_create(type_str)
         return GoalState(self, handle)
+
+    def goal_unpickle(self, path: str) -> GoalState:
+        """Load a goal state previously serialised with :meth:`GoalState.pickle`."""
+        handle, err = self._lib.leanpy_kernel_goal_unpickle(str(path))
+        if err:
+            raise RuntimeError(f"goal unpickle failed: {err}")
+        return GoalState(self, handle)
+
+    # -- environment serialisation ---------------------------------------
+
+    def env_pickle(self, path: str) -> None:
+        err = self._lib.leanpy_kernel_env_pickle(str(path))
+        if err:
+            raise RuntimeError(f"env pickle failed: {err}")
+
+    def env_unpickle(self, path: str) -> None:
+        err = self._lib.leanpy_kernel_env_unpickle(str(path))
+        if err:
+            raise RuntimeError(f"env unpickle failed: {err}")
+
+    # -- frontend --------------------------------------------------------
+
+    def find_source_path(self, module_name: str) -> str:
+        """Locate the ``.lean`` source file for ``module_name``."""
+        s = self._lib.leanpy_kernel_frontend_find_source_path(module_name)
+        if s.startswith("<error:"):
+            raise RuntimeError(s)
+        return s
+
+    def process(self, source: str) -> str:
+        """Process Lean source code against the current environment.
+        Returns a multi-line string of new constants per command, separated by
+        ``\n---\n``."""
+        return self._lib.leanpy_kernel_frontend_process(source)
+
+    def collect_sorrys(self, source: str) -> tuple[GoalState | None, str]:
+        """Extract all `sorry` placeholders in ``source`` as a draftable
+        :class:`GoalState`. Returns ``(state, message)`` — state is ``None`` if
+        no sorries were found."""
+        handle, msg = self._lib.leanpy_kernel_frontend_collect_sorrys(source)
+        return (GoalState(self, handle) if handle is not None else None, msg)
+
+    # -- delab utilities -------------------------------------------------
+
+    def unfold_aux_lemmas(self, src: str) -> str:
+        return self._lib.leanpy_kernel_delab_unfold_aux_lemmas(src)
+
+    def unfold_matchers(self, src: str) -> str:
+        return self._lib.leanpy_kernel_delab_unfold_matchers(src)
+
+    def instantiate_all(self, src: str) -> str:
+        return self._lib.leanpy_kernel_delab_instantiate_all(src)
+
+    def expr_proj_to_app(self, src: str) -> str:
+        return self._lib.leanpy_kernel_delab_expr_proj_to_app(src)
 
 
 __all__ = ["Kernel", "GoalState", "TacticResult"]

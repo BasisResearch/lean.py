@@ -96,3 +96,78 @@ def test_lean_error_str_contains_kind(example_lib):
         assert "xyzzy" in s
     else:
         pytest.fail("expected LeanError")
+
+
+# ---- Lean callable error path (Phase 3c) -----------------------------
+
+
+def test_lean_callable_failure_raises_runtime_error(example_lib):
+    """An IO.userError thrown inside a Lean closure surfaces as a
+    Python `RuntimeError` carrying the original Lean message."""
+    f = example_lib.py_make_lean_failing_callable(None)
+    with pytest.raises(RuntimeError) as ei:
+        f()
+    assert "intentional Lean failure" in str(ei.value)
+
+
+# ---- Round-trip: Python error → Lean catches → Lean re-throws -------
+
+
+def test_python_attribute_error_round_trip(example_lib):
+    """`AttributeError` is one of CPython's most common — make sure
+    the `LeanPyCallbackError` route preserves it."""
+    with pytest.raises(LeanPyCallbackError) as ei:
+        example_lib.propagatePythonError("(1).nonexistent_method()")
+    assert ei.value.python_type == "AttributeError"
+
+
+def test_python_type_error_round_trip(example_lib):
+    """TypeError preserves its type label across the bridge."""
+    with pytest.raises(LeanPyCallbackError) as ei:
+        example_lib.propagatePythonError("1 + 'a'")
+    assert ei.value.python_type == "TypeError"
+
+
+def test_python_value_error_round_trip(example_lib):
+    """ValueError preserves its type label across the bridge."""
+    with pytest.raises(LeanPyCallbackError) as ei:
+        example_lib.propagatePythonError("int('abc')")
+    assert ei.value.python_type == "ValueError"
+
+
+def test_python_callback_error_python_message_attr(example_lib):
+    """`LeanPyCallbackError.python_message` is just the message body
+    (no `TypeName: ` prefix). This is the form to pass back to Python
+    code that wants to re-raise with the original semantics."""
+    with pytest.raises(LeanPyCallbackError) as ei:
+        example_lib.propagatePythonError("undefined_x")
+    e = ei.value
+    assert "undefined_x" in e.python_message
+    assert not e.python_message.startswith("NameError:"), \
+        "python_message should be the unprefixed payload"
+
+
+def test_lean_error_no_python_attrs(example_lib):
+    """A pure-Lean error (`IO.userError`) is `LeanError` but NOT a
+    `LeanPyCallbackError`, so callers can dispatch on the exception
+    type alone."""
+    with pytest.raises(LeanError) as ei:
+        example_lib.py_lean_panic("just lean")
+    assert not isinstance(ei.value, LeanPyCallbackError)
+
+
+# ---- Smoke: nested call paths preserve error info -------------------
+
+
+def test_lean_callable_raised_message_preserved(example_lib):
+    """When Python invokes a Lean callable that throws, the resulting
+    RuntimeError carries the *Lean* error message in its body."""
+    f = example_lib.py_make_lean_failing_callable(None)
+    try:
+        f()
+    except RuntimeError as e:
+        msg = str(e)
+        # The closure throws "intentional Lean failure from closure".
+        assert "intentional Lean failure" in msg
+    else:
+        pytest.fail("expected RuntimeError")

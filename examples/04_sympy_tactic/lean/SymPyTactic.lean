@@ -97,6 +97,52 @@ def evalSympy : Tactic := fun stx =>
     goal.assign proof
   | _ => throwUnsupportedSyntax
 
+/-! ### Phase 3d: Expr-based interface
+
+Pass `Lean.Expr` trees across the FFI instead of pretty-printed strings.
+The Python side gets a fully-typed `LeanInductiveValue` mirror of the
+Expr and converts to SymPy directly, raising a typed `LeanError` on
+constructors it doesn't know how to translate.
+
+The function below is invoked from Python (it's an `@[python]` entry,
+not used by the in-Lean tactic). The tactic itself still uses the
+string path because doing the in-Lean Expr→Py marshalling on top of an
+already-running tactic state introduces a second layer of refcount
+gymnastics that the current MetaM ↔ LeanPy.Python plumbing doesn't yet
+cleanly support — see the GoalState lifecycle caveat in
+docs/ARCHITECTURE.md. -/
+
+/-- Recursively render a Lean Expr in a SymPy-friendly form. Unlike
+`goalToSymPy` above this one is invoked on already-marshalled exprs
+(no `MetaM` context) and walks the structure literally. -/
+private partial def exprToSymPy (e : Lean.Expr) : String :=
+  match e with
+  | .lit (.natVal n) => toString n
+  | .lit (.strVal s) => s!"\"{s}\""
+  | .const n _ => n.toString
+  | .bvar i => s!"x{i}"
+  | .fvar id => id.name.toString
+  | .mvar id => s!"?{id.name}"
+  | .sort _ => "Sort"
+  | .app f x =>
+    let fn := exprToSymPy f
+    let arg := exprToSymPy x
+    s!"{fn}({arg})"
+  | .lam _ _ _ _ => "Lambda(...)"
+  | .forallE _ _ _ _ => "Forall(...)"
+  | _ => "<unsupported>"
+
+/-- Expr-based variant of `sympy_eq_accept`. Receives `Lean.Expr` trees
+(via the `derive_python` Reflect registration), converts them to SymPy
+expressions string-side, and asks SymPy whether `simplify(lhs - rhs) =
+0`. Returns `false` if SymPy raises an error. -/
+@[python "sympy_expr_eq_accept"]
+def sympyExprEqAccept (lhs rhs : Lean.Expr) : IO Bool := do
+  init ()
+  let lhsStr := exprToSymPy lhs
+  let rhsStr := exprToSymPy rhs
+  sympyEqAccept lhsStr rhsStr
+
 end SymPyTactic
 
 #export_python_registry "SymPyTactic"

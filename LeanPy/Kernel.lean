@@ -320,7 +320,8 @@ def goalPretty (state : GoalState) : IO String := do
     let ctx ← freshCoreContext
     let cs : Core.State := { env }
     try
-      let (s, _) ← (Meta.MetaM.run' (s := state.metaState) do
+      let act : MetaM String := do
+        state.restoreMetaM
         let goals := state.goals
         let strs ← goals.mapM fun mvarId => do
           let some decl := (← getMCtx).findDecl? mvarId | return s!"<missing {mvarId.name}>"
@@ -333,7 +334,8 @@ def goalPretty (state : GoalState) : IO String := do
             let target ← ppExprStr decl.type
             let body := if hyps.isEmpty then "" else "\n".intercalate hyps.toList ++ "\n"
             return s!"{body}⊢ {target}"
-        return "\n\n".intercalate strs).toIO ctx cs
+        return "\n\n".intercalate strs
+      let (s, _) ← act.run'.toIO ctx cs
       return s
     catch e => return s!"<error: {e.toString}>"
 
@@ -424,5 +426,262 @@ def goalContinue (target branch : GoalState) :
   match target.continue branch with
   | .ok s => return (some s, "")
   | .error e => return (none, e)
+
+/-! ## Prograde tactics (try_have / try_let / try_define / try_draft)
+
+The full implementations live in `LeanPy/Kernel/Goal.lean`; these are
+the @[python]-facing wrappers that take string arguments and return
+the (status-string × Option GoalState) pair used elsewhere. -/
+
+/-- `have h : type := ?` — introduce a new hypothesis named `binderName` of
+the parsed `type`, leaving a fresh subgoal for its value. -/
+@[python "leanpy_kernel_goal_try_have"]
+def goalTryHave (state : GoalState) (binderName : String) (typeStr : String) :
+    IO (String × Option GoalState) := do
+  match state.mainGoal? with
+  | none => return ("invalidAction\nno goals", none)
+  | some g =>
+    runGoalTactic state (state.tryHave (.focus g) binderName.toName typeStr)
+
+/-- `let n : type := ?` — like `have` but introduces a `let` binding. -/
+@[python "leanpy_kernel_goal_try_let"]
+def goalTryLet (state : GoalState) (binderName : String) (typeStr : String) :
+    IO (String × Option GoalState) := do
+  match state.mainGoal? with
+  | none => return ("invalidAction\nno goals", none)
+  | some g =>
+    runGoalTactic state (state.tryLet (.focus g) binderName.toName typeStr)
+
+/-- `let n : _ := expr` — introduce a definition with the given expression. -/
+@[python "leanpy_kernel_goal_try_define"]
+def goalTryDefine (state : GoalState) (binderName : String) (exprStr : String) :
+    IO (String × Option GoalState) := do
+  match state.mainGoal? with
+  | none => return ("invalidAction\nno goals", none)
+  | some g =>
+    runGoalTactic state (state.tryDefine (.focus g) binderName.toName exprStr)
+
+/-- Draft an expression possibly containing `sorry`s; remaining `sorry`s
+become subgoals. Used for top-down proof sketches. -/
+@[python "leanpy_kernel_goal_try_draft"]
+def goalTryDraft (state : GoalState) (exprStr : String) :
+    IO (String × Option GoalState) := do
+  match state.mainGoal? with
+  | none => return ("invalidAction\nno goals", none)
+  | some g =>
+    runGoalTactic state (state.tryDraft (.focus g) exprStr)
+
+/-! ## Goal state introspection extras -/
+
+/-- All goal mvar names in the order pantograph reports them. -/
+@[python "leanpy_kernel_goal_state_goal_names"]
+def goalStateGoalNames (state : GoalState) : IO (Array String) :=
+  return state.goalsArray.map (·.name.toString)
+
+/-- Names of parent metavariables (those that became assigned/fragmented to
+produce this state). -/
+@[python "leanpy_kernel_goal_state_parent_names"]
+def goalStateParentNames (state : GoalState) : IO (Array String) :=
+  return state.parentMVars.toArray.map (·.name.toString)
+
+/-- The root mvar's name. -/
+@[python "leanpy_kernel_goal_state_root_name"]
+def goalStateRootName (state : GoalState) : IO String :=
+  return state.root.name.toString
+
+/-! ## Replay / subsume
+
+`replay` merges two descendant branches into a single goal state.
+`subsume` checks whether a goal can be discharged by an earlier solved
+goal.  Both are pantograph operations — we expose them in a textual form
+for now since the underlying types include MetavarContexts.
+-/
+
+/-- Replay branch differential `src → src'` onto `dst`. Returns the merged
+goal state on success, or an error string. -/
+@[python "leanpy_kernel_goal_replay"]
+def goalReplay (dst src src' : GoalState) :
+    IO (Option GoalState × String) := do
+  match (← envRef.get) with
+  | none => return (none, "no environment loaded")
+  | some env =>
+    let ctx ← freshCoreContext
+    let cs : Core.State := { env }
+    try
+      let (r, _) ← (GoalState.replay dst src src').toIO ctx cs
+      return (some r, "")
+    catch e => return (none, s!"replay failed: {e.toString}")
+
+/-- Subsume the given goal in `state` by some candidate from `candidates`.
+Returns `(subsumption, optional new state, optional subsumptor mvar name)`. -/
+@[python "leanpy_kernel_goal_subsume"]
+def goalSubsume (state : GoalState) (goalName : String) (candidateNames : Array String)
+    : IO (String × Option GoalState × String) := do
+  match (← envRef.get) with
+  | none => return ("none", none, "")
+  | some env =>
+    let ctx ← freshCoreContext
+    let cs : Core.State := { env }
+    let goal : MVarId := { name := goalName.toName }
+    let cands := candidateNames.map fun s => ({ name := s.toName } : MVarId)
+    try
+      let (((sub, next?, sub?), _)) ← ((state.subsume goal cands).toIO ctx cs)
+      let label := match sub with
+        | .none => "none"
+        | .subsumed => "subsumed"
+        | .cycle => "cycle"
+      let subName := sub?.map (·.name.toString) |>.getD ""
+      return (label, next?, subName)
+    catch e => return ("error", none, e.toString)
+
+/-! ## Pretty-printing and serialisation -/
+
+/-- Render the GoalState's main goal expression (assigned mvar) as text. -/
+@[python "leanpy_kernel_goal_print"]
+def goalPrint (state : GoalState) : IO String := goalPretty state
+
+/-- Returns a JSON-string-encoded list of goal hypotheses + targets, one
+serialised goal per goal-mvar. Plain-text for now (Protocol.Goal would
+require all of pantograph's serialise infra). -/
+@[python "leanpy_kernel_goal_serialize"]
+def goalSerialize (state : GoalState) : IO String := goalPretty state
+
+/-! ## Pickle / unpickle of environments and goal states
+
+These are unsafe wrappers: the file format is `saveModuleData`. The
+output is suitable for `goal_unpickle` / `env_unpickle` round-tripping
+within the same Lean version. -/
+
+@[python "leanpy_kernel_env_pickle"]
+unsafe def envPickle (path : String) : IO String := do
+  match (← envRef.get) with
+  | none => return "no environment loaded"
+  | some env =>
+    try
+      environmentPickle env (System.FilePath.mk path) none
+      return ""
+    catch e => return e.toString
+
+@[python "leanpy_kernel_env_unpickle"]
+unsafe def envUnpickle (path : String) : IO String := do
+  try
+    let (env, _region) ← environmentUnpickle (System.FilePath.mk path) none
+    -- Note: dropping the CompactedRegion leaks memory; future work to
+    -- thread that through to Python.
+    envRef.set (some env)
+    return ""
+  catch e => return e.toString
+
+@[python "leanpy_kernel_goal_pickle"]
+unsafe def goalPickle (state : GoalState) (path : String) : IO String := do
+  try
+    goalStatePickle state (System.FilePath.mk path) none
+    return ""
+  catch e => return e.toString
+
+@[python "leanpy_kernel_goal_unpickle"]
+unsafe def goalUnpickle (path : String) : IO (Option GoalState × String) := do
+  try
+    let (state, _region) ← goalStateUnpickle (System.FilePath.mk path) none
+    return (some state, "")
+  catch e => return (none, e.toString)
+
+/-! ## Frontend: process / source path / collect_sorrys
+
+`process` parses + elaborates a source-file string and returns a list of
+the new constants per command. `findSourcePath` resolves a module name
+to its `.lean` source path. `collectSorrys` extracts sorry positions
+and goals as a draftable goal state. -/
+
+@[python "leanpy_kernel_frontend_find_source_path"]
+def frontendFindSourcePath (moduleName : String) : IO String := do
+  try
+    let p ← Frontend.findSourcePath moduleName.toName
+    return p.toString
+  catch e => return s!"<error: {e.toString}>"
+
+/-- Process a single Lean source string against the current environment.
+Returns a newline-separated list of constants defined per command. -/
+@[python "leanpy_kernel_frontend_process"]
+def frontendProcess (source : String) : IO String := do
+  match (← envRef.get) with
+  | none => return "no environment loaded"
+  | some env =>
+    try
+      let (fctx, fstate) ← Frontend.createContextStateFromFile source "<process>" (env? := some env) {}
+      let m : Frontend.FrontendM (List String) :=
+        Frontend.mapCompilationSteps fun step => do
+          let names ← step.newConstants
+          return "\n".intercalate (names.toList.map toString)
+      let (steps, _) ← (m.run {} |>.run fctx |>.run fstate)
+      return "\n---\n".intercalate steps
+    catch e => return s!"<error: {e.toString}>"
+
+/-- Collect all `sorry` positions in the source as a draftable goal state.
+Returns the goal state pretty-printed (for now). -/
+@[python "leanpy_kernel_frontend_collect_sorrys"]
+def frontendCollectSorrys (source : String) : IO (Option GoalState × String) := do
+  match (← envRef.get) with
+  | none => return (none, "no environment loaded")
+  | some env =>
+    try
+      let (fctx, fstate) ← Frontend.createContextStateFromFile source "<collect_sorrys>" (env? := some env) {}
+      let m : Frontend.FrontendM (List Frontend.InfoWithContext) := do
+        let xss ← Frontend.mapCompilationSteps fun step => Frontend.collectSorrys step
+        return xss.flatten
+      let (sorrys, _) ← (m.run {} |>.run fctx |>.run fstate)
+      if sorrys.isEmpty then
+        return (none, "no sorrys")
+      let ctx ← freshCoreContext
+      let cs : Core.State := { env }
+      let metaM : MetaM Frontend.AnnotatedGoalState := Frontend.sorrysToGoalState sorrys
+      let (annotated, _) ← (metaM.run').toIO ctx cs
+      return (some annotated.state, "")
+    catch e => return (none, s!"<error: {e.toString}>")
+
+/-! ## Delab utilities -/
+
+/-- Unfold auxiliary lemmas in an expression's textual representation. -/
+@[python "leanpy_kernel_delab_unfold_aux_lemmas"]
+def delabUnfoldAuxLemmas (src : String) : IO String := runCore do
+  withTerm src fun expr => do
+    let r ← LeanPy.Kernel.unfoldAuxLemmas expr
+    ppExprStr r
+
+/-- Unfold matchers in an expression's textual representation. -/
+@[python "leanpy_kernel_delab_unfold_matchers"]
+def delabUnfoldMatchers (src : String) : IO String := runCore do
+  withTerm src fun expr => do
+    let r ← LeanPy.Kernel.unfoldMatchers expr
+    ppExprStr r
+
+/-- Instantiate all metavariables and aux/matcher unfolds. -/
+@[python "leanpy_kernel_delab_instantiate_all"]
+def delabInstantiateAll (src : String) : IO String := runCore do
+  withTerm src fun expr => do
+    let r ← LeanPy.Kernel.instantiateAll expr
+    ppExprStr r
+
+/-- Convert any `Expr.proj` nodes to their applied form. -/
+@[python "leanpy_kernel_delab_expr_proj_to_app"]
+def delabExprProjToApp (src : String) : IO String := runCore do
+  let env ← getEnv
+  withTerm src fun expr => do
+    let r := LeanPy.Kernel.exprProjToApp env expr
+    ppExprStr r
+
+/-- Diagnostic dump of a goal state's internals (env names + mvar table). -/
+@[python "leanpy_kernel_goal_state_diag"]
+def goalStateDiag (state : GoalState) : IO String := do
+  match (← envRef.get) with
+  | none => return "no environment loaded"
+  | some env =>
+    let ctx ← freshCoreContext
+    let cs : Core.State := { env }
+    try
+      let act : CoreM String := state.diag none {}
+      let (s, _) ← act.toIO ctx cs
+      return s
+    catch e => return s!"<error: {e.toString}>"
 
 end LeanPy.Kernel

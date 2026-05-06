@@ -111,3 +111,65 @@ def test_py_round_trip_list(example_lib):
     py_list = example_lib.makeList123(None)
     assert isinstance(py_list, list)
     assert py_list == [1, 2, 3]
+
+
+# Phase 3a/c: deeper bidirectional introspection
+
+
+def test_expr_lam_built_in_python(example_lib):
+    """Build `Expr.lam` (a 4-field constructor with a BinderInfo enum)
+    in Python and verify Lean accepts the structure. Exercises a
+    constructor with mixed payload types (Name × Expr × Expr × BinderInfo)."""
+    Name = example_lib.Name
+    Expr = example_lib.Expr
+    BinderInfo = example_lib.BinderInfo
+    nat = Expr.const(Name.str(Name.anonymous, "Nat"), [])
+    var = Expr.bvar(0)
+    lam = Expr.lam(Name.str(Name.anonymous, "x"), nat, var, BinderInfo.default)
+    s = example_lib.py_expr_describe(lam)
+    # exprDescribe doesn't have a `lam` arm; falls through to "<other>".
+    assert s == "<other>"
+
+
+def test_level_round_trip(example_lib):
+    """A `Lean.Level` built in Python should be accepted by any Lean
+    function whose signature mentions `Lean.Level`. We don't have one
+    yet, so just verify the constructors exist."""
+    Level = example_lib.Level
+    assert Level.zero.ctor == "zero"
+    succ = Level.succ(Level.zero)
+    assert succ.ctor == "succ"
+    assert succ.fields[0].ctor == "zero"
+
+
+def test_lean_callable_from_python_to_lean(example_lib):
+    """A Lean closure wrapped as a Python callable can be invoked
+    transparently. Demonstrates the bidirectional callback path
+    (Phase 3c)."""
+    f = example_lib.py_make_lean_sum_callable(None)
+    assert callable(f)
+    assert f(10, 20, 30) == 60
+
+
+# Phase 3d: send Lean.Expr trees from Python to Lean
+
+
+def test_expr_built_in_python_round_trips_via_string(example_lib):
+    """Build an Expr in Python and let Lean structurally summarise it.
+    Confirms the LeanInductiveValue → Lean.Expr direction works for
+    nested constructors with mixed payload types."""
+    Name = example_lib.Name
+    Expr = example_lib.Expr
+    succ = Expr.const(Name.str(Name.str(Name.anonymous, "Nat"), "succ"), [])
+    zero = Expr.const(Name.str(Name.str(Name.anonymous, "Nat"), "zero"), [])
+    e = Expr.app(succ, zero)
+    s = example_lib.py_expr_structural_summary(e)
+    assert s == "app(const(Nat.succ), const(Nat.zero))"
+
+
+def test_expr_lit_built_in_python(example_lib):
+    """Expr.lit (Literal.natVal 42) round-trips."""
+    Expr = example_lib.Expr
+    Literal = example_lib.Literal
+    e = Expr.lit(Literal.natVal(42))
+    assert example_lib.py_expr_structural_summary(e) == "nat(42)"

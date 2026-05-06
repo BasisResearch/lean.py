@@ -2,18 +2,25 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  # Run the full test suite on Linux + macOS using the pinned Lean
-  # toolchain. The lifted Pantograph kernel code in LeanPy/Kernel/*
-  # depends on 4.29-era APIs, so multi-toolchain matrix testing is
-  # currently disabled — re-introduce when the kernel surface stabilises.
+  # Run the full test suite on Linux + macOS across the pinned Lean
+  # toolchain plus a recent stable and nightly. The lifted Pantograph
+  # kernel code requires 4.29-era APIs (`String.rawEndPos`, the new
+  # `Lean.replay` shape, etc.), so we don't try the older 4.25 line.
+  # `nightly` is allowed to fail — it tracks upstream breakage.
   test:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         toolchain:
-          - "default"            # whatever lean-toolchain pins
+          - "default"                         # what lean-toolchain pins
+          - "leanprover/lean4:v4.29.1"        # latest 4.29 patch release
+          - "leanprover/lean4:nightly"        # tracks main; allowed to fail
+        include:
+          - toolchain: "leanprover/lean4:nightly"
+            allow_failure: true
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow_failure == true }}
     steps:
       - uses: actions/checkout@v4
 

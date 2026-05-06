@@ -813,5 +813,46 @@ protected def GoalState.calcEnter (state : GoalState) (site : Site)
       fragments,
     }
 
+/-! ### Prograde tactics — try_have / try_let / try_define / try_draft
+
+These are pantograph's `tryHave` family from `Pantograph/Library.lean`,
+ported here so the LeanPy kernel exposes the full surface. -/
+
+@[export leanpy_kernel_goal_try_have_m]
+protected def GoalState.tryHave (state : GoalState) (site : Site)
+    (binderName : Name) (type : String) : Elab.TermElabM TacticResult := do
+  let type ← match (← parseTermM type) with
+    | .ok syn   => pure syn
+    | .error e  => return .parseError e
+  state.restoreElabM
+  state.tryTacticM site (Tactic.evalHave binderName type)
+
+@[export leanpy_kernel_goal_try_let_m]
+protected def GoalState.tryLet (state : GoalState) (site : Site)
+    (binderName : Name) (type : String) : Elab.TermElabM TacticResult := do
+  let type ← match (← parseTermM type) with
+    | .ok syn  => pure syn
+    | .error e => return .parseError e
+  state.restoreElabM
+  state.tryTacticM site (Tactic.evalLet binderName type)
+
+@[export leanpy_kernel_goal_try_define_m]
+protected def GoalState.tryDefine (state : GoalState) (site : Site)
+    (binderName : Name) (expr : String) : Elab.TermElabM TacticResult := do
+  let expr ← match (← parseTermM expr) with
+    | .ok syn  => pure syn
+    | .error e => return .parseError e
+  state.restoreElabM
+  state.tryTacticM site (Tactic.evalDefine binderName expr)
+
+@[export leanpy_kernel_goal_try_draft_m]
+protected def GoalState.tryDraft (state : GoalState) (site : Site)
+    (expr : String) : Elab.TermElabM TacticResult := do
+  let expr ← match (← parseTermM expr) with
+    | .ok syn  => pure syn
+    | .error e => return .parseError e
+  state.restoreElabM
+  state.tryTacticM site (Tactic.evalDraft expr)
+
 initialize
   registerTraceClass `LeanPy.Kernel.GoalState.replay

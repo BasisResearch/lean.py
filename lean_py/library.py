@@ -490,6 +490,13 @@ class LeanLibrary:
             self.ffi.dec_ref(result)
             raise RuntimeError(f"{init_name} failed")
         self.ffi.dec_ref(result)
+        # The user library's `initialize_*` block has now run all its
+        # `initialize` declarations. Flip the runtime's global init
+        # flag so subsequent calls (e.g. frontend operations that
+        # invoke `mkEmptyEnvironment` via `parseHeader`) succeed.
+        # See `lean_py/_runtime.py` for more on why.
+        if getattr(self.ffi, "lean_io_mark_end_initialization", None) is not None:
+            self.ffi.lean_io_mark_end_initialization()
 
     def _load_registry(self) -> LibraryRegistry:
         funcs_sym = f"{self.name}_funcs_json"

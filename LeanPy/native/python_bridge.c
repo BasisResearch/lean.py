@@ -49,6 +49,7 @@ typedef int PyGILState_STATE;
     X(void,        PyErr_Clear,              (void)) \
     X(void,        PyErr_Fetch,              (PyObject **, PyObject **, PyObject **)) \
     X(void,        PyErr_NormalizeException, (PyObject **, PyObject **, PyObject **)) \
+    X(void,        PyErr_SetString,          (PyObject *, const char *)) \
     X(PyObject *,  PyObject_Str,             (PyObject *)) \
     X(PyObject *,  PyObject_Repr,            (PyObject *)) \
     X(const char *, PyUnicode_AsUTF8,        (PyObject *)) \
@@ -74,11 +75,15 @@ typedef int PyGILState_STATE;
     X(PyObject *,  PyObject_Type,            (PyObject *)) \
     X(PyObject *,  PyTuple_New,              (Py_ssize_t)) \
     X(int,         PyTuple_SetItem,          (PyObject *, Py_ssize_t, PyObject *)) \
+    X(PyObject *,  PyTuple_GetItem,          (PyObject *, Py_ssize_t)) \
+    X(Py_ssize_t,  PyTuple_Size,             (PyObject *)) \
     X(PyObject *,  PyList_New,               (Py_ssize_t)) \
     X(int,         PyList_SetItem,           (PyObject *, Py_ssize_t, PyObject *)) \
     X(PyObject *,  PyDict_New,               (void)) \
     X(int,         PyDict_SetItem,           (PyObject *, PyObject *, PyObject *)) \
     X(int,         PyDict_SetItemString,     (PyObject *, const char *, PyObject *)) \
+    X(int,         PyDict_Next,              (PyObject *, Py_ssize_t *, PyObject **, PyObject **)) \
+    X(Py_ssize_t,  PyDict_Size,              (PyObject *)) \
     X(PyObject *,  PyImport_AddModule,       (const char *)) \
     X(PyObject *,  PyModule_GetDict,         (PyObject *)) \
     X(PyObject *,  PyEval_GetBuiltins,       (void)) \
@@ -89,6 +94,9 @@ typedef int PyGILState_STATE;
     X(PyObject *,  PyNumber_TrueDivide,      (PyObject *, PyObject *)) \
     X(PyObject *,  PyNumber_Power,           (PyObject *, PyObject *, PyObject *)) \
     X(PyObject *,  PyNumber_Negative,        (PyObject *)) \
+    X(PyObject *,  PyType_FromSpec,          (void *)) \
+    X(PyObject *,  PyType_GenericAlloc,      (PyObject *, Py_ssize_t)) \
+    X(void,        PyObject_Free,            (void *)) \
 
 /* ssize_t is signed; mark equality opcodes from object.h */
 #define Py_EQ 2
@@ -106,6 +114,7 @@ PYSYMS
 static PyObject *p_Py_None  = NULL;
 static PyObject *p_Py_True  = NULL;
 static PyObject *p_Py_False = NULL;
+static PyObject *p_PyExc_RuntimeError = NULL;
 
 /* ------------------------------------------------------------------ */
 /*  Helpers for Python-side use (allocator + refcount + boxing)        */
@@ -359,6 +368,12 @@ LEAN_EXPORT lean_obj_res lean_py_initialize(lean_obj_arg unit, lean_obj_arg worl
     p_Py_False = (PyObject *) dlsym(py_handle, "_Py_FalseStruct");
     if (!p_Py_None || !p_Py_True || !p_Py_False) {
         return raise_io_error("LeanPy: failed to resolve Py_None/True/False");
+    }
+    /* PyExc_RuntimeError is exported as a `PyObject *` global; we want the
+     * value of the symbol, so dereference once. */
+    {
+        PyObject **slot = (PyObject **) dlsym(py_handle, "PyExc_RuntimeError");
+        if (slot) p_PyExc_RuntimeError = *slot;
     }
     if (!p_Py_IsInitialized()) {
         p_Py_Initialize();
@@ -725,23 +740,273 @@ LEAN_EXPORT lean_obj_res lean_py_neg(b_lean_obj_arg a, lean_obj_arg world) {
 /* ------------------------------------------------------------------ */
 /*  Lean closures as Python callables                                   */
 /*                                                                    */
-/*  The full implementation builds a Python heap type whose tp_call    */
-/*  trampolines into a stored Lean closure. Until that's wired (see   */
-/*  Phase 3c of the plan), these stubs return a clear runtime error.   */
+/*  Build a CPython heap type whose `tp_call` trampolines into a       */
+/*  stored Lean closure. Each instance owns one Lean reference to the  */
+/*  closure, dropped on `tp_dealloc`. Two heap types are registered:   */
+/*    - LeanCallable    : closure of type `Array Py → IO Py`           */
+/*    - LeanCallableKw  : closure of type                              */
+/*                        `Array Py → Array (String × Py) → IO Py`     */
+/*                                                                    */
+/*  Slot constants and basic flags are inlined here so we don't need   */
+/*  Python headers to build the Lean library.                          */
 /* ------------------------------------------------------------------ */
+
+/* Slot constants (CPython Include/typeslots.h). */
+#define PY_SLOT_TP_DEALLOC 52
+#define PY_SLOT_TP_CALL    50
+#define PY_SLOT_TP_REPR    66
+#define PY_SLOT_TP_DOC     56
+
+/* Type flags (CPython Include/cpython/object.h). */
+#define PY_TPFLAGS_DEFAULT  ((unsigned long)0)
+#define PY_TPFLAGS_BASETYPE ((unsigned long)1 << 10)
+
+typedef struct PyType_Slot_s {
+    int   slot;
+    void *pfunc;
+} PyType_Slot;
+
+typedef struct PyType_Spec_s {
+    const char  *name;
+    int          basicsize;
+    int          itemsize;
+    unsigned int flags;
+    PyType_Slot *slots;
+} PyType_Spec;
+
+/* The `PyObject` header layout. CPython 3.7+ uses these two fields up
+ * front; we don't depend on exact internal alignment beyond that. */
+typedef struct {
+    Py_ssize_t  ob_refcnt;
+    void       *ob_type;
+} PyObject_HEAD_t;
+
+/* Our heap-type instance: header followed by the Lean closure. */
+typedef struct {
+    PyObject_HEAD_t  base;
+    lean_object     *closure;
+    int              has_kw;
+} LeanCallableObject;
+
+static PyObject *g_lean_callable_type    = NULL;
+static PyObject *g_lean_callable_kw_type = NULL;
+
+static PyObject *leancallable_call(PyObject *self_, PyObject *args, PyObject *kwds);
+static void      leancallable_dealloc(PyObject *self_);
+static PyObject *leancallable_repr(PyObject *self_);
+
+/* Convert an `IO.Error` payload into a printable C string. The bridge's
+ * own errors are `userError String`; for others we fall back to the
+ * underlying field-0 if it looks like a string, else a generic tag. */
+static void format_lean_io_error(lean_object *err, char *buf, size_t bufsz) {
+    if (!err) {
+        snprintf(buf, bufsz, "Lean error (no payload)");
+        return;
+    }
+    /* Most IO.Error variants have a String at field 0. userError is
+     * tag 18, payload (msg : String). */
+    if (lean_is_scalar(err)) {
+        snprintf(buf, bufsz, "Lean IO.Error (tag %u, no payload)",
+                 (unsigned)lean_unbox(err));
+        return;
+    }
+    unsigned tag = lean_ptr_tag(err);
+    /* lean_ctor_get returns a borrowed pointer */
+    lean_object *fld = lean_ctor_get(err, 0);
+    if (fld && !lean_is_scalar(fld) && lean_ptr_tag(fld) == 249 /* string tag */) {
+        snprintf(buf, bufsz, "%s", lean_string_cstr(fld));
+        return;
+    }
+    /* userError-shaped: even if the tag detection above fails, just try
+     * to read field 0 as a string. */
+    if (fld && !lean_is_scalar(fld)) {
+        const char *cs = lean_string_cstr(fld);
+        if (cs && cs[0]) {
+            snprintf(buf, bufsz, "%s", cs);
+            return;
+        }
+    }
+    snprintf(buf, bufsz, "Lean IO.Error (tag %u)", tag);
+}
+
+/* Build the heap type. Returns a NEW reference owned by the global
+ * pointer; subsequent calls return the cached value. */
+static PyObject *make_callable_type(const char *name, int has_kw_marker) {
+    (void)has_kw_marker; /* shape is identical; differentiated by g_* */
+    PyType_Slot slots[5];
+    int i = 0;
+    slots[i++] = (PyType_Slot){PY_SLOT_TP_CALL,    (void *)leancallable_call};
+    slots[i++] = (PyType_Slot){PY_SLOT_TP_DEALLOC, (void *)leancallable_dealloc};
+    slots[i++] = (PyType_Slot){PY_SLOT_TP_REPR,    (void *)leancallable_repr};
+    slots[i++] = (PyType_Slot){PY_SLOT_TP_DOC,
+        (void *)"Lean closure exposed as a Python callable."};
+    slots[i++] = (PyType_Slot){0, NULL};
+    PyType_Spec spec;
+    spec.name      = name;
+    spec.basicsize = (int)sizeof(LeanCallableObject);
+    spec.itemsize  = 0;
+    spec.flags     = (unsigned int)(PY_TPFLAGS_DEFAULT | PY_TPFLAGS_BASETYPE);
+    spec.slots     = slots;
+    return (PyObject *)p_PyType_FromSpec(&spec);
+}
+
+static PyObject *get_lean_callable_type(int has_kw) {
+    if (has_kw) {
+        if (!g_lean_callable_kw_type) {
+            g_lean_callable_kw_type =
+                make_callable_type("leanpy.LeanCallableKw", 1);
+        }
+        return g_lean_callable_kw_type;
+    }
+    if (!g_lean_callable_type) {
+        g_lean_callable_type = make_callable_type("leanpy.LeanCallable", 0);
+    }
+    return g_lean_callable_type;
+}
+
+static void leancallable_dealloc(PyObject *self_) {
+    LeanCallableObject *self = (LeanCallableObject *)self_;
+    if (self->closure) {
+        lean_dec(self->closure);
+        self->closure = NULL;
+    }
+    /* Heap types track the type ref on each instance; we must dec the
+     * type, then free the instance memory. */
+    PyObject *type = (PyObject *)self->base.ob_type;
+    p_PyObject_Free(self_);
+    if (type) p_Py_DecRef(type);
+}
+
+static PyObject *leancallable_repr(PyObject *self_) {
+    LeanCallableObject *self = (LeanCallableObject *)self_;
+    char buf[128];
+    snprintf(buf, sizeof(buf),
+             "<LeanCallable%s @ %p>",
+             self->has_kw ? "Kw" : "",
+             (void *)self->closure);
+    return p_PyUnicode_DecodeUTF8(buf, (Py_ssize_t)strlen(buf), NULL);
+}
+
+static PyObject *leancallable_call(PyObject *self_, PyObject *args, PyObject *kwds) {
+    LeanCallableObject *self = (LeanCallableObject *)self_;
+    if (!self->closure) {
+        if (p_PyErr_SetString && p_PyExc_RuntimeError) {
+            p_PyErr_SetString(p_PyExc_RuntimeError,
+                              "LeanCallable: closure has been freed");
+        }
+        return NULL;
+    }
+
+    Py_ssize_t n = p_PyTuple_Size(args);
+    if (n < 0) return NULL;
+
+    /* Build `Array Py` from positional args. */
+    lean_object *arr = lean_alloc_array((size_t)n, (size_t)n);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *po = p_PyTuple_GetItem(args, i); /* borrowed */
+        p_Py_IncRef(po);                           /* +1 for wrapper */
+        lean_object *wrapped = wrap_pyobject(po);
+        lean_array_set_core(arr, (size_t)i, wrapped);
+    }
+
+    /* Bump closure ref so the Lean apply consumer doesn't free our
+     * captured reference. */
+    lean_inc(self->closure);
+    lean_object *result = NULL;
+
+    if (self->has_kw) {
+        Py_ssize_t kn = (kwds && p_PyDict_Size) ? p_PyDict_Size(kwds) : 0;
+        if (kn < 0) kn = 0;
+        lean_object *kwarr = lean_alloc_array((size_t)kn, (size_t)kn);
+        if (kn > 0) {
+            Py_ssize_t pos = 0;
+            PyObject *k = NULL, *v = NULL;
+            size_t idx = 0;
+            while (p_PyDict_Next(kwds, &pos, &k, &v)) {
+                const char *cs = p_PyUnicode_AsUTF8(k);
+                if (!cs) cs = "";
+                lean_object *key_str = lean_mk_string(cs);
+                p_Py_IncRef(v);
+                lean_object *val_py = wrap_pyobject(v);
+                lean_object *pair = lean_alloc_ctor(0, 2, 0);
+                lean_ctor_set(pair, 0, key_str);
+                lean_ctor_set(pair, 1, val_py);
+                lean_array_set_core(kwarr, idx++, pair);
+            }
+        }
+        result = lean_apply_3(self->closure, arr, kwarr, lean_box(0));
+    } else {
+        result = lean_apply_2(self->closure, arr, lean_box(0));
+    }
+
+    if (!result) {
+        if (p_PyErr_SetString && p_PyExc_RuntimeError) {
+            p_PyErr_SetString(p_PyExc_RuntimeError,
+                              "Lean closure returned NULL");
+        }
+        return NULL;
+    }
+
+    if (lean_io_result_is_error(result)) {
+        char buf[2048];
+        lean_object *err = lean_io_result_get_error(result);
+        format_lean_io_error(err, buf, sizeof(buf));
+        if (p_PyErr_SetString && p_PyExc_RuntimeError) {
+            p_PyErr_SetString(p_PyExc_RuntimeError, buf);
+        }
+        lean_dec(result);
+        return NULL;
+    }
+
+    /* Ok branch: ctor field 0 is a `Py`, i.e. an external object
+     * wrapping a `PyObject*`. Bump the Python refcount and return. */
+    lean_object *py_handle = lean_io_result_get_value(result); /* borrowed */
+    PyObject *out = unwrap_pyobject(py_handle);
+    if (out) p_Py_IncRef(out);
+    lean_dec(result);
+    if (!out) {
+        if (p_PyErr_SetString && p_PyExc_RuntimeError) {
+            p_PyErr_SetString(p_PyExc_RuntimeError,
+                              "Lean closure returned a NULL Py object");
+        }
+        return NULL;
+    }
+    return out;
+}
+
+/* Allocate a LeanCallableObject of the given variant and bind the closure
+ * (transferring ownership). Wraps the resulting Python object as a Lean
+ * `Py` via wrap_pyobject so the Lean side sees it as just another Py. */
+static lean_object *make_callable_obj(lean_obj_arg closure, int has_kw) {
+    if (!py_initialized) {
+        lean_dec(closure);
+        return raise_io_error(
+            "LeanPy.Python.Py.fromLeanCallable: Python not initialized; "
+            "call LeanPy.Python.init first");
+    }
+    PyObject *type = get_lean_callable_type(has_kw);
+    if (!type) {
+        lean_dec(closure);
+        return raise_io_error(
+            "LeanPy.Python.Py.fromLeanCallable: failed to create type");
+    }
+    PyObject *instance = p_PyType_GenericAlloc(type, 0);
+    if (!instance) {
+        lean_dec(closure);
+        return raise_py_error();
+    }
+    LeanCallableObject *self = (LeanCallableObject *)instance;
+    self->closure = closure; /* owned */
+    self->has_kw  = has_kw;
+    return lean_io_result_mk_ok(wrap_pyobject(instance));
+}
 
 LEAN_EXPORT lean_obj_res leanpy_make_callable(lean_obj_arg closure, lean_obj_arg world) {
     (void)world;
-    lean_dec(closure);
-    return raise_io_error(
-        "LeanPy.Python.Py.fromLeanCallable: not yet implemented "
-        "(see plan phase 3c)");
+    return make_callable_obj(closure, 0);
 }
 
 LEAN_EXPORT lean_obj_res leanpy_make_callable_kw(lean_obj_arg closure, lean_obj_arg world) {
     (void)world;
-    lean_dec(closure);
-    return raise_io_error(
-        "LeanPy.Python.Py.fromLeanCallableKw: not yet implemented "
-        "(see plan phase 3c)");
+    return make_callable_obj(closure, 1);
 }

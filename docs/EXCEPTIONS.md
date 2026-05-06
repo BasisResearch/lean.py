@@ -104,6 +104,28 @@ unconditionally captures it; if Lean has wrapped the call in `tryCatchPy` it
 catches there, otherwise the exception propagates back to the original Python
 caller as `LeanPyCallbackError`.
 
+## Lean callable failures (Phase 3c)
+
+A Lean closure wrapped as a Python callable via
+`LeanPy.Python.Py.fromLeanCallable` runs as `Array Py → IO Py`. If the
+closure throws an `IO.Error`, the C trampoline catches it and raises a
+Python `RuntimeError` whose message is the original Lean error string:
+
+```lean
+let cb ← Py.fromLeanCallable fun _ => do
+  throw (IO.userError "intentional Lean failure")
+return cb  -- returned to Python
+```
+
+```python
+cb()  # raises RuntimeError("intentional Lean failure")
+```
+
+The trampoline currently uses `RuntimeError` rather than `LeanError` to
+keep the C-side dependencies minimal — there's no need to dlsym the
+Python-side `LeanError` class. If that becomes a hot path we can extend
+the trampoline to recognise and reraise the typed form.
+
 ## Reference table
 
 | Class                                    | Python | Lean equivalent              | When raised                                  |
@@ -111,7 +133,10 @@ caller as `LeanPyCallbackError`.
 | `LeanError`                              | ✅     | any `IO.Error` ctor          | Lean function fails                          |
 | `LeanPyCallbackError(LeanError)`         | ✅     | `IO.userError "T: msg"`      | CPython exception inside a Lean→Python call  |
 | `LeanPy.Python.PyException` (struct)     | —      | parsed `tryCatchPy` arg      | matches the bridge's userError format        |
+| `RuntimeError`                           | ✅     | `IO.Error` from a callable   | Lean closure invoked via `fromLeanCallable`  |
 
 ## Tests
 
-`tests/test_exceptions.py` exercises every cell of the table above.
+`tests/test_exceptions.py` exercises every cell of the table above
+(16 tests). `tests/test_callable.py::test_callable_raises_runtime_error`
+covers the closure-error path specifically.
