@@ -35,6 +35,33 @@ from lean_py.registry import FuncInfo, LibraryRegistry, TypeInfo
 from lean_py.utils import lean_lib_dir, run_command, shared_lib_extension
 
 
+def _list_init_symbols(dylib: Path) -> list[str]:
+    """Return all globally-exported `initialize_*` symbols in `dylib`.
+
+    Used as a fallback when the canonical `initialize_<lib>` symbol
+    isn't where we expect — Lake's symbol naming has shifted across
+    toolchains. We invoke `nm`/`llvm-nm` rather than ctypes because
+    ctypes has no portable symbol-listing API.
+    """
+    try:
+        out = subprocess.run(
+            ["nm", "-gj", str(dylib)],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return []
+    candidates = []
+    for line in out.splitlines():
+        sym = line.strip()
+        # macOS prefixes exported symbols with `_`; strip that.
+        if sym.startswith("_"):
+            sym = sym[1:]
+        if sym.startswith("initialize_") and "Lean_" not in sym \
+                and "LeanPy_" not in sym:
+            candidates.append(sym)
+    return candidates
+
+
 def _ensure_rpath(dylib: Path) -> None:
     """On macOS, rewrite any `@rpath/libFoo.dylib` references to absolute
     paths under Lean's `lib/lean`. This lets `dlopen` succeed without a
@@ -414,15 +441,46 @@ class LeanLibrary:
         init()
         LeanLibrary._task_manager_initialized = True
 
-    def _initialize_lean_module(self) -> None:
-        init_name = f"initialize_{self.name}"
-        try:
-            init_fn = getattr(self.lib, init_name)
-        except AttributeError as e:
+    def _resolve_init_symbol(self) -> str:
+        """Resolve the module-initializer symbol, allowing for the
+        Lake-naming variations Lean has gone through.
+
+        The canonical name is `initialize_<lib>`, but newer toolchains
+        sometimes prefix the package or use double underscores. As a
+        last resort we ask `nm` for any `initialize_*` symbol exported
+        by the dylib and pick the best fit."""
+        candidates = [
+            f"initialize_{self.name}",
+            f"initialize_{self.name}_{self.name}",  # lib<pkg>_<lib>
+        ]
+        for c in candidates:
+            try:
+                getattr(self.lib, c)
+                return c
+            except AttributeError:
+                continue
+
+        symbols = _list_init_symbols(self.path)
+        # Prefer one that ends in `_<self.name>`.
+        for s in symbols:
+            if s.endswith(f"_{self.name}"):
+                return s
+        if len(symbols) == 1:
+            return symbols[0]
+        if symbols:
             raise RuntimeError(
-                f"library does not export {init_name}; was it compiled with "
-                f"`@[python]` attributes and `precompileModules`/`shared`?"
-            ) from e
+                f"library has multiple `initialize_*` symbols and none "
+                f"matches `_{self.name}`: {symbols}"
+            )
+        raise RuntimeError(
+            f"library does not export an `initialize_*` symbol for "
+            f"`{self.name}`; was it compiled with `@[python]` attributes "
+            f"and `precompileModules`/`shared`?"
+        )
+
+    def _initialize_lean_module(self) -> None:
+        init_name = self._resolve_init_symbol()
+        init_fn = getattr(self.lib, init_name)
         init_fn.argtypes = [c_uint8, POINTER(LeanObject)]
         init_fn.restype = POINTER(LeanObject)
 
@@ -430,7 +488,7 @@ class LeanLibrary:
         if result.contents.m_tag != 0:
             self.ffi.io_result_show_error(result)
             self.ffi.dec_ref(result)
-            raise RuntimeError(f"initialize_{self.name} failed")
+            raise RuntimeError(f"{init_name} failed")
         self.ffi.dec_ref(result)
 
     def _load_registry(self) -> LibraryRegistry:
