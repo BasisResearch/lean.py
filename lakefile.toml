@@ -1,7 +1,0 @@
-name = "LeanPy"
-version = "0.1.0"
-defaultTargets = ["LeanPy"]
-
-[[lean_lib]]
-name = "LeanPy"
-defaultFacets=["static", "leanArts"]
