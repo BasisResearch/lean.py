@@ -32,6 +32,7 @@ to a Python caller. Future work could expand them.
 import LeanPy.Registry
 import LeanPy.TypeRepr
 import LeanPy.Attr
+import LeanPy.Python
 
 open Lean
 
@@ -51,3 +52,19 @@ derive_python Lean.SourceInfo
 derive_python Lean.Syntax
 
 end LeanPy.Reflect
+
+/-! ## Transport-layer convenience wrappers
+
+These wrap specific kernel types as `Py` handles via `Py.ofLeanObj`.
+They make it straightforward to pass Lean kernel objects to Python
+callbacks through the `Py.call` bridge. -/
+
+namespace LeanPy.Python.Py
+
+open Lean LeanPy.Python
+
+def ofExpr  (e : Expr)  : IO Py := ofLeanObj e
+def ofName  (n : Name)  : IO Py := ofLeanObj n
+def ofLevel (l : Level) : IO Py := ofLeanObj l
+
+end LeanPy.Python.Py

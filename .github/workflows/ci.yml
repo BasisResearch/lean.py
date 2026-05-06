@@ -2,19 +2,15 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  # Run the full test suite on Linux + macOS across the pinned Lean
-  # toolchain plus a recent stable and nightly. The lifted Pantograph
-  # kernel code requires 4.29-era APIs (`String.rawEndPos`, the new
-  # `Lean.replay` shape, etc.), so we don't try the older 4.25 line.
-  # `nightly` is allowed to fail — it tracks upstream breakage.
+  # Run the full test suite on Linux + macOS. The Pantograph Lake
+  # dependency pins us to 4.29.1; nightly is allowed to fail.
   test:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         toolchain:
-          - "default"                         # what lean-toolchain pins
-          - "leanprover/lean4:v4.29.1"        # latest 4.29 patch release
+          - "default"                         # what lean-toolchain pins (v4.29.1)
           - "leanprover/lean4:nightly"        # tracks main; allowed to fail
         include:
           - toolchain: "leanprover/lean4:nightly"
@@ -115,6 +111,62 @@ jobs:
           (cd tests/lean && lake build)
       - name: leaks(1) check
         run: tests/leaks_check.sh
+
+  # Linux-only: build an ASAN-instrumented libleanshared.so, then run
+  # the test suite with LEANPY_LIBLEAN pointing at it.
+  asan-linux:
+    runs-on: ubuntu-latest
+    needs: test
+    continue-on-error: true   # ASAN may flag known upstream issues
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install elan
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            -sSf | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> $GITHUB_PATH
+      - name: Install Lean toolchain
+        run: |
+          elan toolchain install $(cat lean-toolchain)
+          elan default $(cat lean-toolchain)
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build
+      - name: Build ASAN-instrumented Lean runtime
+        run: |
+          LEAN_VERSION=$(cat lean-toolchain | sed 's|.*:||')
+          git clone --depth 1 --branch "$LEAN_VERSION" https://github.com/leanprover/lean4.git lean4-src
+          mkdir lean4-build && cd lean4-build
+          cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DLEAN_EXTRA_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g3" \
+            -DLEAN_EXTRA_LINKER_FLAGS="-fsanitize=address" \
+            ../lean4-src/src
+          ninja leanshared || true  # best-effort: build just the shared lib
+      - name: Install uv + deps
+        uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: uv sync --dev
+      - run: uv pip install sympy numpy
+      - name: Build
+        run: |
+          lake build
+          (cd tests/lean && lake build)
+      - name: Run tests under ASAN
+        run: |
+          ASAN_LIB=$(find lean4-build -name 'libleanshared.so' -print -quit 2>/dev/null || true)
+          if [ -z "$ASAN_LIB" ]; then
+            echo "::warning::ASAN libleanshared not found; skipping ASAN tests"
+            exit 0
+          fi
+          LEANPY_LIBLEAN="$ASAN_LIB" \
+          ASAN_OPTIONS=detect_leaks=0:halt_on_error=0 \
+          LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.8 \
+          uv run pytest tests -v --tb=short 2>&1 | tee asan.log
+          # Surface any ASAN errors as annotations
+          if grep -q "ERROR: AddressSanitizer" asan.log; then
+            echo "::warning::ASAN detected errors — see log for details"
+          fi
 
   # Linux-only: run the test suite under valgrind for stronger coverage
   # of definite leaks.

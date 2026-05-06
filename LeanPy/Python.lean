@@ -176,6 +176,25 @@ dict. -/
 @[extern "leanpy_make_callable_kw"]
 opaque fromLeanCallableKw : (@& Array Py → @& Array (String × Py) → IO Py) → IO Py
 
+/-! ### Transport-layer unification
+
+These operations allow any Lean object to be wrapped as a Python
+`LeanObjHandle` (a minimal C-level Python type holding a `lean_object*`)
+and passed through the `Py` bridge.  The reverse direction extracts the
+`lean_object*` back.  Together they let `derive_python` types (e.g.
+`Lean.Expr`, `Lean.Name`) be used as live `Py` objects in `Py.call`. -/
+
+/-- Wrap any Lean object as a Python `LeanObjHandle`, returning it as
+a `Py` value. The Lean refcount is incremented so the handle owns its
+own reference. -/
+@[extern "lean_py_of_lean_obj"]
+opaque ofLeanObj {α : Type} (obj : @& α) : IO Py
+
+/-- Extract a `lean_object*` from a Python `LeanObjHandle`.  Returns
+`none` if the `Py` value is not a `LeanObjHandle`. -/
+@[extern "lean_py_to_lean_obj"]
+opaque toLeanObj {α : Type} (py : @& Py) : IO (Option α)
+
 end Py
 
 /-! ## Convenience instances and notation

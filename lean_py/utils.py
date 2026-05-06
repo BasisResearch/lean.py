@@ -46,7 +46,13 @@ def shared_lib_extension() -> str:
 
 
 def find_lean_dynlib() -> Path:
-    """Locate `libleanshared.<ext>` in the active toolchain's `lib/lean`."""
+    """Locate `libleanshared.<ext>` in the active toolchain's `lib/lean`.
+
+    Set ``LEANPY_LIBLEAN`` to override — useful for pointing at an
+    ASAN-instrumented ``libleanshared.so`` on a debug box.
+    """
+    if env := os.environ.get("LEANPY_LIBLEAN"):
+        return Path(env)
     ext = shared_lib_extension()
     lib = lean_lib_dir() / f"libleanshared{ext}"
     if lib.exists():

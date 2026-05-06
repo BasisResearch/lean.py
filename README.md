@@ -202,8 +202,9 @@ Lean side can recover via `LeanPy.Python.tryCatchPy`. Full reference at
 
 ## Pantograph-equivalent kernel
 
-`LeanPy/Kernel.lean` and `LeanPy/Kernel/*.lean` lift Pantograph's
-operations layer (with attribution; see file headers) into a
+`LeanPy/Kernel.lean` and `LeanPy/Kernel/*.lean` build on the
+[Pantograph](https://github.com/leanprover/Pantograph) library (pulled
+in as a Lake dependency) and expose its operations layer as a
 `@[python]`-callable surface — goal state, tactic execution, frontend
 processing, environment introspection, expression elaboration,
 serialisation, delab. The high-level wrapper lives at
@@ -234,13 +235,12 @@ lake build
 uv run pytest tests -v
 ```
 
-There are 75 passing tests covering FFI primitives, all marshalled
+There are 125 passing tests covering FFI primitives, all marshalled
 types, the typed exception path, bidirectional introspection (ADT
-mirrors + live Py round-trip), the kernel facade, sympy / numpy
-demos through Lean, and refcount stress. Six tests are skipped — they
-trigger a known cumulative-state-churn segfault when goal states are
-created and freed many times in a single pytest run; the kernel still
-works for normal use, see `docs/ARCHITECTURE.md` for the analysis.
+mirrors + live Py round-trip), the kernel facade (goal state lifecycle,
+tactic execution, environment introspection, elaboration, frontend
+processing, serialisation), sympy / numpy demos through Lean, and
+refcount stress.
 
 For a heavier memory check (`leaks` on macOS, `valgrind` on Linux):
 
@@ -278,5 +278,5 @@ lean_py/
   utils.py               # toolchain / lib path helpers
 
 examples/                # self-contained demos (see ./examples/README.md)
-tests/                   # 37-test suite (FFI / marshal / kernel / Python-in-Lean / sympy / numpy / memory)
+tests/                   # 125-test suite (FFI / marshal / kernel / Python-in-Lean / sympy / numpy / memory)
 ```

@@ -541,6 +541,10 @@ class Marshaller:
         then drop the Lean handle. The caller sees an honest-to-goodness
         Python value, not an opaque LeanObj.
 
+        If the wrapped ``PyObject*`` is actually a ``LeanObjHandle``
+        (created via ``Py.ofLeanObj`` on the Lean side), we return a
+        ``LeanObj`` wrapping the inner ``lean_object*`` instead.
+
         For passing Python values back to Lean as `Py`, a Python-side
         `LeanObj` (i.e. round-tripping a previously-received handle) is
         accepted; arbitrary Python values are not (use `Py.ofString`
@@ -555,8 +559,28 @@ class Marshaller:
             unwrap.argtypes = [ObjPtr]
             unwrap.restype = ctypes.py_object
 
+        # `leanpy_is_lean_obj_handle` returns the inner lean_object* pointer
+        # value (as uintptr_t) if the Py wraps a LeanObjHandle, or 0.
+        is_handle = ffi._find_leanpy_helper("leanpy_is_lean_obj_handle")
+        if is_handle is not None:
+            is_handle.argtypes = [ObjPtr]
+            is_handle.restype = c_size_t
+
         def from_lean(p):
-            if unwrap is None or not p:
+            if not p:
+                return LeanObj(p, owned=True)
+            # Check if this Py wraps a LeanObjHandle (transport unification).
+            if is_handle is not None:
+                inner_ptr = is_handle(p)
+                if inner_ptr:
+                    # It's a LeanObjHandle — return a LeanObj wrapping the
+                    # inner lean_object*. We borrow (inc ref) since the
+                    # LeanObjHandle owns its own reference.
+                    inner = ctypes.cast(inner_ptr, ObjPtr)
+                    ffi.lean_inc(inner)
+                    ffi.lean_dec(p)
+                    return LeanObj(inner, owned=True)
+            if unwrap is None:
                 return LeanObj(p, owned=True)
             try:
                 py_val = unwrap(p)

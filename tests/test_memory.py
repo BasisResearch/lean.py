@@ -125,3 +125,36 @@ def test_pyobject_round_trip_no_pyref_leak(example_lib):
         assert py_list == [1, 2, 3]
     gc.collect()
     assert sys.getrefcount(sentinel) == base_rc
+
+
+# -----------------------------------------------------------------------
+# Kernel operation memory stress tests
+# -----------------------------------------------------------------------
+
+
+def test_goal_state_create_drop_stress(example_lib):
+    """Create and drop GoalState handles 2000x — catches leaked
+    lean_object* from the kernel wrapper layer."""
+    example_lib.leanpy_kernel_init_search("")
+    example_lib.leanpy_kernel_load_env(["Init"])
+    gc.collect()
+    for _ in range(2_000):
+        state = example_lib.leanpy_kernel_goal_create("Nat")
+        assert state is not None
+        del state
+    gc.collect()
+
+
+def test_tactic_chain_stress(example_lib):
+    """Run a short tactic chain many times to stress goal-state
+    allocation and refcount management."""
+    example_lib.leanpy_kernel_init_search("")
+    if not example_lib.leanpy_kernel_is_loaded(None):
+        example_lib.leanpy_kernel_load_env(["Init"])
+    gc.collect()
+    for _ in range(500):
+        state = example_lib.leanpy_kernel_goal_create("∀ n : Nat, n + 0 = n")
+        msg, next_state = example_lib.leanpy_kernel_goal_try_tactic(state, "intro n")
+        del next_state
+        del state
+    gc.collect()

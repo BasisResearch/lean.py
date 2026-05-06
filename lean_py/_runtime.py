@@ -442,9 +442,13 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         ctor_cls = structs.get("lean_ctor_object")
         ctor = ctypes.cast(o, POINTER(ctor_cls))
         offset = ctor_cls.m_objs.offset
-        addr = ctypes.addressof(ctor.contents) + offset
-        arr = ctypes.cast(addr, POINTER(LeanObjectPtr * (i + 1)))
-        return arr.contents[i]
+        # Read the pointer value as an integer to avoid creating a ctypes
+        # pointer that aliases into the Lean ctor's m_objs memory. If the
+        # ctor is later freed (lean_dec), an aliased pointer would become
+        # stale when the Lean allocator reuses the memory.
+        elem_addr = ctypes.addressof(ctor.contents) + offset + i * ctypes.sizeof(LeanObjectPtr)
+        raw_val = c_void_p.from_address(elem_addr).value or 0
+        return ctypes.cast(c_void_p(raw_val), LeanObjectPtr)
 
     def lean_ctor_set(self, o, i, v):
         ctor_cls = structs.get("lean_ctor_object")

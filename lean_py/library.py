@@ -432,9 +432,17 @@ class LeanLibrary:
         """
         if LeanLibrary._task_manager_initialized:
             return
-        try:
-            init = self.lib.lean_init_task_manager
-        except AttributeError:
+        # The symbol lives in libleanshared, not the user dylib.
+        # Try the user dylib first (works on macOS with RTLD_GLOBAL),
+        # then fall back to the FFI's lean shared lib handle.
+        init = None
+        for handle in (self.lib, self.ffi.lib):
+            try:
+                init = handle.lean_init_task_manager
+                break
+            except AttributeError:
+                continue
+        if init is None:
             return
         init.argtypes = []
         init.restype = None

@@ -4,6 +4,9 @@ open Lake DSL System
 package LeanPy where
   version := v!"0.1.0"
 
+require Pantograph from git
+  "https://github.com/leanprover/Pantograph.git" @ "dev"
+
 /-- Compile the Python-bridge C source against the active Lean toolchain. -/
 target pythonBridgeO pkg : FilePath := do
   let oFile := pkg.buildDir / "native" / "python_bridge.o"

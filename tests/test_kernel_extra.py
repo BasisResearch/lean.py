@@ -144,33 +144,24 @@ def test_goal_pickle_round_trip(kernel):
 # ----------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason=(
-    "try_have invokes Meta.MetaM and trips the cumulative-churn "
-    "segfault when the full test suite has already exercised the "
-    "kernel. Passes in isolation. See docs/ARCHITECTURE.md "
-    "'GoalState lifecycle'."
-))
 def test_goal_try_have_introduces_hypothesis(kernel):
     state = kernel.goal_create("∀ n : Nat, n + 0 = n")
     res = state.try_have("h", "Nat")
     assert res.status in {"success", "invalidAction", "failure", "parseError"}
 
 
-@pytest.mark.skip(reason="see test_goal_try_have_introduces_hypothesis")
 def test_goal_try_let_introduces_let(kernel):
     state = kernel.goal_create("∀ n : Nat, n + 0 = n")
     res = state.try_let("h", "Nat")
     assert res.status in {"success", "invalidAction", "failure", "parseError"}
 
 
-@pytest.mark.skip(reason="see test_goal_try_have_introduces_hypothesis")
 def test_goal_try_define_with_value(kernel):
     state = kernel.goal_create("∀ n : Nat, n + 0 = n")
     res = state.try_define("h", "(0 : Nat)")
     assert res.status in {"success", "invalidAction", "failure", "parseError"}
 
 
-@pytest.mark.skip(reason="see test_goal_try_have_introduces_hypothesis")
 def test_goal_try_draft_with_sorry(kernel):
     state = kernel.goal_create("Nat")
     res = state.try_draft("(sorry : Nat)")

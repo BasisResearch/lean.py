@@ -21,6 +21,54 @@
 #include <dlfcn.h>
 
 /* ------------------------------------------------------------------ */
+/*  keepAlive — force @[export] functions to consume object args       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Called from Lean @[extern "leanpy_keep_alive"] to force the compiler
+ * to treat the parameter as owned (consumed). The function simply
+ * decrements the refcount (consuming the owned reference) and returns
+ * IO.ok (). Without this, the Lean compiler's borrowing inference may
+ * make @[export] functions borrow arguments instead of consuming them,
+ * which breaks Python's FFI assumption that all parameters are owned.
+ */
+LEAN_EXPORT lean_obj_res leanpy_keep_alive(lean_obj_arg x, lean_obj_arg w) {
+#ifdef LEANPY_RC_DEBUG
+    if (!lean_is_scalar(x)) {
+        fprintf(stderr, "[keepAlive] ptr=%p m_rc=%d tag=%u  -> dec\n",
+                (void*)x, (int)x->m_rc, (unsigned)lean_ptr_tag(x));
+    }
+#endif
+    lean_dec(x);
+    return lean_io_result_mk_ok(lean_box(0));
+}
+
+/*
+ * Debug helper: read the m_rc of a lean_object* passed from Python.
+ * Called as:  lib._cffi.leanpy_debug_rc(ptr)
+ * Returns:    lean_io_result_mk_ok(lean_box(m_rc))
+ */
+LEAN_EXPORT lean_obj_res leanpy_debug_rc(lean_obj_arg x, lean_obj_arg w) {
+    int rc = 0;
+    if (!lean_is_scalar(x)) {
+        rc = (int)x->m_rc;
+    }
+    /* Don't consume x — caller still owns it */
+    lean_inc(x);  /* compensate for lean_obj_arg convention */
+    /* Actually: lean_obj_arg means we received an owned ref,
+       but we want to leave it alone.  We need to NOT dec it.
+       But the IO wrapper will try to dec the world param only.
+       Just return without dec'ing x — oh wait, we *received*
+       an owned ref.  We must either consume or keep it.
+       Since the caller (Python) still wants it, let's not dec.
+       The caller already inc'd for us, so just don't touch it.
+       Actually the simplest: do nothing with x, just return rc.
+       But lean_obj_arg means the callee owns it, so we must dec. */
+    lean_dec(x);
+    return lean_io_result_mk_ok(lean_box((size_t)(unsigned)rc));
+}
+
+/* ------------------------------------------------------------------ */
 /*  Forward-declared opaque CPython types                              */
 /* ------------------------------------------------------------------ */
 
@@ -1009,4 +1057,200 @@ LEAN_EXPORT lean_obj_res leanpy_make_callable(lean_obj_arg closure, lean_obj_arg
 LEAN_EXPORT lean_obj_res leanpy_make_callable_kw(lean_obj_arg closure, lean_obj_arg world) {
     (void)world;
     return make_callable_obj(closure, 1);
+}
+
+/* ------------------------------------------------------------------ */
+/*  LeanObjHandle: C-level Python type wrapping a lean_object*         */
+/*                                                                    */
+/*  This enables transport-layer unification: a Lean object (e.g. an  */
+/*  Expr, Name, Level) can be wrapped as a Python object and passed   */
+/*  through the Py bridge, then unwrapped back on either side.        */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    /* Python object header — we replicate the layout manually since
+       PyObject is only forward-declared (we dlopen libpython). */
+    Py_ssize_t    ob_refcnt;
+    PyObject     *ob_type;
+    lean_object  *ptr;  /* owned reference */
+} LeanObjHandle;
+
+/* Slots for the heap type created via PyType_FromSpec. */
+
+/* METH_NOARGS = 0x0004 */
+#define LEAN_METH_NOARGS 0x0004
+
+/* tp_dealloc: release the lean_object ref and free the instance. */
+static void lean_obj_handle_dealloc(PyObject *self) {
+    LeanObjHandle *h = (LeanObjHandle *)self;
+    if (h->ptr) {
+        lean_dec(h->ptr);
+        h->ptr = NULL;
+    }
+    /* Decref the type and free memory. */
+    PyObject *type = h->ob_type;
+    p_PyObject_Free(self);
+    p_Py_DecRef(type);
+}
+
+/* __int__: return the raw pointer value (for ctypes interop). */
+static PyObject *lean_obj_handle_int(PyObject *self, PyObject *args) {
+    (void)args;
+    LeanObjHandle *h = (LeanObjHandle *)self;
+    return p_PyLong_FromLongLong((long long)(uintptr_t)h->ptr);
+}
+
+/* __repr__: LeanObjHandle(0x...) */
+static PyObject *lean_obj_handle_repr(PyObject *self) {
+    LeanObjHandle *h = (LeanObjHandle *)self;
+    char buf[80];
+    snprintf(buf, sizeof(buf), "LeanObjHandle(0x%lx)", (unsigned long)(uintptr_t)h->ptr);
+    return p_PyUnicode_FromStringAndSize(buf, (Py_ssize_t)strlen(buf));
+}
+
+/* Method table for __int__. */
+typedef struct {
+    const char *ml_name;
+    void       *ml_meth;
+    int         ml_flags;
+    const char *ml_doc;
+} LeanPyMethodDef;
+
+static LeanPyMethodDef lean_obj_handle_methods[] = {
+    { "__int__",  (void *)lean_obj_handle_int,  LEAN_METH_NOARGS,  "Raw pointer value." },
+    { NULL, NULL, 0, NULL }
+};
+
+/* Slot IDs from CPython's object.h / typeslots.h */
+#define LEAN_Py_tp_dealloc   52
+#define LEAN_Py_tp_repr      66
+#define LEAN_Py_tp_methods   64
+#define LEAN_Py_nb_int       10
+#define LEAN_Py_tp_doc       56
+
+/* PyType_Slot compatible struct */
+typedef struct {
+    int   slot;
+    void *pfunc;
+} LeanPySlot;
+
+/* PyType_Spec compatible struct */
+typedef struct {
+    const char   *name;
+    int           basicsize;
+    int           itemsize;
+    unsigned int  flags;
+    LeanPySlot   *slots;
+} LeanPySpec;
+
+static LeanPySlot lean_obj_handle_slots[] = {
+    { LEAN_Py_tp_dealloc,  (void *)lean_obj_handle_dealloc },
+    { LEAN_Py_tp_repr,     (void *)lean_obj_handle_repr },
+    { LEAN_Py_tp_methods,  (void *)lean_obj_handle_methods },
+    { LEAN_Py_tp_doc,      (void *)"Opaque handle to a Lean object (lean_object*)." },
+    { 0, NULL }
+};
+
+static LeanPySpec lean_obj_handle_spec = {
+    "lean_py.LeanObjHandle",
+    (int)sizeof(LeanObjHandle),
+    0,
+    /* Py_TPFLAGS_DEFAULT = 0 for heap types via FromSpec */
+    0,
+    lean_obj_handle_slots
+};
+
+static PyObject *g_lean_obj_handle_type = NULL;
+
+static PyObject *get_lean_obj_handle_type(void) {
+    if (!g_lean_obj_handle_type) {
+        g_lean_obj_handle_type = p_PyType_FromSpec(&lean_obj_handle_spec);
+    }
+    return g_lean_obj_handle_type;
+}
+
+/* ---- Lean-facing FFI ------------------------------------------------- */
+
+/*
+ * lean_py_of_lean_obj: wrap any lean_object* as a Python LeanObjHandle,
+ * then return it as a Lean Py (external class wrapping PyObject*).
+ *
+ * @[extern "lean_py_of_lean_obj"]
+ * opaque Py.ofLeanObj (obj : @& α) : IO Py
+ */
+LEAN_EXPORT lean_obj_res lean_py_of_lean_obj(b_lean_obj_arg obj, lean_obj_arg world) {
+    (void)world;
+    ENSURE_INIT();
+
+    PyObject *type = get_lean_obj_handle_type();
+    if (!type) return raise_io_error("LeanPy: failed to create LeanObjHandle type");
+
+    PyObject *inst = p_PyType_GenericAlloc(type, 0);
+    if (!inst) return raise_py_error();
+
+    LeanObjHandle *h = (LeanObjHandle *)inst;
+    lean_inc(obj);       /* we borrow `obj`; take our own ref */
+    h->ptr = obj;
+
+    return lean_io_result_mk_ok(wrap_pyobject(inst));
+}
+
+/*
+ * lean_py_to_lean_obj: extract a lean_object* from a Python LeanObjHandle.
+ * Returns Option α:  some(obj) if the Python object is a LeanObjHandle,
+ * none otherwise.
+ *
+ * @[extern "lean_py_to_lean_obj"]
+ * opaque Py.toLeanObj (py : @& Py) : IO (Option α)
+ */
+LEAN_EXPORT lean_obj_res lean_py_to_lean_obj(b_lean_obj_arg py_ext, lean_obj_arg world) {
+    (void)world;
+    ENSURE_INIT();
+
+    if (!lean_is_external(py_ext)) {
+        /* Return none */
+        return lean_io_result_mk_ok(lean_box(0));
+    }
+
+    PyObject *pyobj = unwrap_pyobject(py_ext);
+    if (!pyobj) {
+        return lean_io_result_mk_ok(lean_box(0));
+    }
+
+    /* Check if pyobj is an instance of LeanObjHandle.
+       Cast to LeanObjHandle* to read ob_type (PyObject is opaque). */
+    PyObject *handle_type = get_lean_obj_handle_type();
+    LeanObjHandle *candidate = (LeanObjHandle *)pyobj;
+    if (!handle_type || candidate->ob_type != handle_type) {
+        return lean_io_result_mk_ok(lean_box(0));  /* none */
+    }
+
+    LeanObjHandle *h = (LeanObjHandle *)pyobj;
+    lean_object *result = h->ptr;
+    if (!result) {
+        return lean_io_result_mk_ok(lean_box(0));  /* none */
+    }
+
+    lean_inc(result);  /* caller gets their own ref */
+
+    /* Build Option.some(result): ctor tag=1, 1 field */
+    lean_object *some = lean_alloc_ctor(1, 1, 0);
+    lean_ctor_set(some, 0, result);
+    return lean_io_result_mk_ok(some);
+}
+
+/*
+ * leanpy_is_lean_obj_handle: Python-side helper to check whether a
+ * lean_object* (seen through the Py external class) wraps a LeanObjHandle.
+ * Returns the inner lean_object* pointer value, or 0 if not a handle.
+ */
+LEAN_EXPORT uintptr_t leanpy_is_lean_obj_handle(b_lean_obj_arg py_ext) {
+    if (!py_initialized || !lean_is_external(py_ext)) return 0;
+    PyObject *pyobj = unwrap_pyobject(py_ext);
+    if (!pyobj) return 0;
+    PyObject *ht = get_lean_obj_handle_type();
+    LeanObjHandle *candidate = (LeanObjHandle *)pyobj;
+    if (!ht || candidate->ob_type != ht) return 0;
+    LeanObjHandle *h = (LeanObjHandle *)pyobj;
+    return (uintptr_t)h->ptr;
 }

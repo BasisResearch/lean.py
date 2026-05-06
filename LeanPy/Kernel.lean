@@ -1,41 +1,40 @@
 /-
-LeanPy.Kernel: a Pantograph-equivalent kernel facade.
+LeanPy.Kernel: a Pantograph-backed kernel facade.
 
-The implementation files (`LeanPy/Kernel/*.lean`) are lifted, with
-attribution, from Pantograph (https://github.com/leanprover/Pantograph,
-licensed under Apache-2.0; the upstream copy of the code lives in this
-repo at `_examples/Pantograph/`). Where pantograph wires things to a
-JSON REPL we instead expose them through `@[python]` for direct C ABI
-use, but the goal-state semantics, tactic execution, frontend
-processing, environment serialisation, and delab logic are all
-identical.
+Goal-state semantics, tactic execution, frontend processing,
+environment serialisation, and delaboration are provided by the
+`Pantograph` Lake dependency (Apache-2.0). This module:
 
-A Lake-dependency port (`require Pantograph from git ...`) was viable
-and would have avoided this in-tree fork; see
-`docs/pantograph-port.plan.md` for the migration sketch.
-
-This top-level module:
-  1. Re-exports every operations module so users can write
-     `import LeanPy.Kernel` and get the full surface.
+  1. Re-imports Pantograph + the LeanPy-specific compat layer so
+     users can write `import LeanPy.Kernel` and get the full surface.
   2. Provides global `envRef`/`initSearch`/`loadEnv`/`isLoaded`/
-     `clearEnv` plus monad runners `runCore` / `runMeta` / `runTermElabM`
-     that bind to the active env.
-  3. Adds `@[python]`-tagged wrappers around every operation pantograph
-     `@[export]`s, so Python callers see them as ordinary FFI symbols.
-
-Pantograph attributions live in the per-module file headers.
+     `clearEnv` plus monad runners `runCore` / `runMeta` that bind
+     to the active env.
+  3. Adds `@[python]`-tagged wrappers around every operation so Python
+     callers see them as ordinary FFI symbols.
 -/
 import Lean
 import LeanPy.Registry
 import LeanPy.Attr
-import LeanPy.Kernel.Goal
+import Pantograph
+import LeanPy.Kernel.Compat
 import LeanPy.Kernel.Frontend
-import LeanPy.Kernel.Serial
-import LeanPy.Kernel.Delab
 
-open Lean Meta Elab
+open Lean Meta Elab Pantograph
 
 namespace LeanPy.Kernel
+
+/-- Force the compiler to treat the parameter as *consumed* (owned) at
+the C ABI level.  Without this, the Lean compiler's borrowing inference
+may generate `@[export]` functions that *borrow* their arguments,
+leaving Python's `lean_inc` (which assumes owned/consuming semantics)
+unbalanced.  Calling `keepAlive x` after the main computation ensures
+`x` stays live and the export function always decrements its reference.
+
+Implemented as `@[extern]` so the compiler truly cannot see through it
+and eliminate the parameter. The C side simply calls `lean_dec(x)`. -/
+@[extern "leanpy_keep_alive"]
+private opaque keepAlive (x : α) : IO Unit
 
 /-! ## Environment lifecycle -/
 
@@ -257,8 +256,8 @@ def decideProp (src : String) : IO String := runCore do
 
 /-! ## Goal state — Python-facing wrappers
 
-The full goal-state surface is in `LeanPy/Kernel/Goal.lean` (lifted
-from pantograph). These Python entry points wrap the major operations
+The full goal-state surface is provided by the Pantograph Lake
+dependency. These Python entry points wrap the major operations
 in a way that's easy to invoke through `@[python]`. -/
 
 /-- Create a fresh goal state for a type-as-a-string. Throws an
@@ -288,60 +287,72 @@ def goalCreate (typeStr : String) : IO GoalState := do
       | .error msg => throw (IO.userError s!"elab error: {msg}")
 
 @[python "leanpy_kernel_goal_is_solved"]
-def goalIsSolved (state : GoalState) : IO Bool := return state.isSolved
+def goalIsSolved (state : GoalState) : IO Bool := do
+  let r := state.isSolved
+  keepAlive state
+  return r
 
 @[python "leanpy_kernel_goal_n_goals"]
-def goalNGoals (state : GoalState) : IO Int := return state.goals.length
+def goalNGoals (state : GoalState) : IO Int := do
+  let n := state.goals.length
+  keepAlive state
+  return n
 
 @[python "leanpy_kernel_goal_main_goal_name"]
-def goalMainGoalName (state : GoalState) : IO String :=
-  return match state.mainGoal? with
-  | some m => toString m.name
-  | none   => ""
+def goalMainGoalName (state : GoalState) : IO String := do
+  let r := match state.mainGoal? with
+    | some m => toString m.name
+    | none   => ""
+  keepAlive state
+  return r
+
+/-- Run a read-only `MetaM` action against a `GoalState`.
+
+Reads the GoalState's mctx and passes it as the initial `Meta.State`
+to a fresh `MetaM.run'`. The `keepAlive state` call at the end forces
+the compiler to keep the GoalState (and all its persistent data-structure
+nodes) alive for the entire duration of the MetaM execution. Without
+this, the compiler may free the GoalState after extracting `metaState`,
+allowing the MetaM pretty-printer to mutate shared persistent-map nodes
+in place (since their RC drops to 1). -/
+private def withGoalStateRead (state : GoalState) (act : MetaM α) : IO α := do
+  match (← envRef.get) with
+  | none => throw <| IO.userError "no environment loaded"
+  | some env =>
+    let ctx ← freshCoreContext
+    let cs : Core.State := { env }
+    let ms := state.metaState
+    let (r, _) ← (act.run' {} ms).toIO ctx cs
+    keepAlive state
+    return r
 
 @[python "leanpy_kernel_goal_root_expr"]
 def goalRootExprPy (state : GoalState) : IO String := do
-  match (← envRef.get) with
-  | none => return ""
-  | some env =>
-    let ctx ← freshCoreContext
-    let cs : Core.State := { env }
-    try
-      let act : MetaM String := do
-        state.restoreMetaM
-        match state.rootExpr? with
-        | none   => return ""
-        | some e => ppExprStr e
-      let (s, _) ← act.run'.toIO ctx cs
-      return s
-    catch _ => return ""
+  try
+    withGoalStateRead state do
+      match state.rootExpr? with
+      | none   => return ""
+      | some e => ppExprStr e
+  catch _ => return ""
 
 @[python "leanpy_kernel_goal_pretty"]
 def goalPretty (state : GoalState) : IO String := do
-  match (← envRef.get) with
-  | none => return "<no env>"
-  | some env =>
-    let ctx ← freshCoreContext
-    let cs : Core.State := { env }
-    try
-      let act : MetaM String := do
-        state.restoreMetaM
-        let goals := state.goals
-        let strs ← goals.mapM fun mvarId => do
-          let some decl := (← getMCtx).findDecl? mvarId | return s!"<missing {mvarId.name}>"
-          Meta.withLCtx decl.lctx decl.localInstances do
-            let mut hyps : Array String := #[]
-            for fvar in decl.lctx do
-              if fvar.isAuxDecl || fvar.isImplementationDetail then continue
-              let ty ← ppExprStr fvar.type
-              hyps := hyps.push s!"{fvar.userName} : {ty}"
-            let target ← ppExprStr decl.type
-            let body := if hyps.isEmpty then "" else "\n".intercalate hyps.toList ++ "\n"
-            return s!"{body}⊢ {target}"
-        return "\n\n".intercalate strs
-      let (s, _) ← act.run'.toIO ctx cs
-      return s
-    catch e => return s!"<error: {e.toString}>"
+  try
+    withGoalStateRead state do
+      let goals := state.goals
+      let strs ← goals.mapM fun mvarId => do
+        let some decl := (← getMCtx).findDecl? mvarId | return s!"<missing {mvarId.name}>"
+        Meta.withLCtx decl.lctx decl.localInstances do
+          let mut hyps : Array String := #[]
+          for fvar in decl.lctx do
+            if fvar.isAuxDecl || fvar.isImplementationDetail then continue
+            let ty ← ppExprStr fvar.type
+            hyps := hyps.push s!"{fvar.userName} : {ty}"
+          let target ← ppExprStr decl.type
+          let body := if hyps.isEmpty then "" else "\n".intercalate hyps.toList ++ "\n"
+          return s!"{body}⊢ {target}"
+      return "\n\n".intercalate strs
+  catch e => return s!"<error: {e.toString}>"
 
 private def messageDataToString (m : MessageData) : IO String :=
   -- MessageData needs a context to render. Use the empty default for our
@@ -360,7 +371,7 @@ private def encodeTacticResult : TacticResult → IO String
   | .parseError msg       => return s!"parseError\n{msg}"
   | .invalidAction msg    => return s!"invalidAction\n{msg}"
 
-private def runGoalTactic (state : GoalState) (act : Elab.TermElabM TacticResult) :
+private def runGoalTactic (_state : GoalState) (act : Elab.TermElabM TacticResult) :
     IO (String × Option GoalState) := do
   match (← envRef.get) with
   | none => return ("invalidAction\nno environment loaded", none)
@@ -381,60 +392,75 @@ private def runGoalTactic (state : GoalState) (act : Elab.TermElabM TacticResult
 @[python "leanpy_kernel_goal_try_tactic"]
 def goalTryTactic (state : GoalState) (tactic : String) :
     IO (String × Option GoalState) := do
-  match state.mainGoal? with
-  | none => return ("invalidAction\nno goals", none)
-  | some g => runGoalTactic state (state.tryTactic (.focus g) tactic)
+  let r ← match state.mainGoal? with
+    | none => pure ("invalidAction\nno goals", none)
+    | some g => runGoalTactic state (state.tryTactic (.focus g) tactic)
+  keepAlive state
+  return r
 
 /-- Direct expression assignment to the main goal. -/
 @[python "leanpy_kernel_goal_try_assign"]
 def goalTryAssign (state : GoalState) (expr : String) :
     IO (String × Option GoalState) := do
-  match state.mainGoal? with
-  | none => return ("invalidAction\nno goals", none)
-  | some g => runGoalTactic state (state.tryAssign (.focus g) expr)
+  let r ← match state.mainGoal? with
+    | none => pure ("invalidAction\nno goals", none)
+    | some g => runGoalTactic state (state.tryAssign (.focus g) expr)
+  keepAlive state
+  return r
 
 /-- Enter `conv` mode on the main goal. -/
 @[python "leanpy_kernel_goal_conv_enter"]
 def goalConvEnter (state : GoalState) : IO (String × Option GoalState) := do
-  match state.mainGoal? with
-  | none => return ("invalidAction\nno goals", none)
-  | some g => runGoalTactic state (state.convEnter (.focus g))
+  let r ← match state.mainGoal? with
+    | none => pure ("invalidAction\nno goals", none)
+    | some g => runGoalTactic state (state.convEnter (.focus g))
+  keepAlive state
+  return r
 
 /-- Enter `calc` mode on the main goal. -/
 @[python "leanpy_kernel_goal_calc_enter"]
 def goalCalcEnter (state : GoalState) : IO (String × Option GoalState) := do
-  match state.mainGoal? with
-  | none => return ("invalidAction\nno goals", none)
-  | some g => runGoalTactic state (state.calcEnter (.focus g))
+  let r ← match state.mainGoal? with
+    | none => pure ("invalidAction\nno goals", none)
+    | some g => runGoalTactic state (state.calcEnter (.focus g))
+  keepAlive state
+  return r
 
 /-- Exit any active `conv`/`calc` fragment. -/
 @[python "leanpy_kernel_goal_fragment_exit"]
 def goalFragmentExit (state : GoalState) : IO (String × Option GoalState) := do
-  match state.mainGoal? with
-  | none => return ("invalidAction\nno goals", none)
-  | some g => runGoalTactic state (state.fragmentExit (.focus g))
+  let r ← match state.mainGoal? with
+    | none => pure ("invalidAction\nno goals", none)
+    | some g => runGoalTactic state (state.fragmentExit (.focus g))
+  keepAlive state
+  return r
 
 /-- Resume a list of named goals. -/
 @[python "leanpy_kernel_goal_resume"]
 def goalResume (state : GoalState) (goalNames : Array String) :
     IO (Option GoalState × String) := do
   let mvars := goalNames.toList.map fun s => MVarId.mk s.toName
-  match state.resume mvars with
-  | .ok s => return (some s, "")
-  | .error e => return (none, e)
+  let r := match state.resume mvars with
+    | .ok s => (some s, "")
+    | .error e => (none, e)
+  keepAlive state
+  return r
 
 /-- Continue from `branch` over the goals of `target`. -/
 @[python "leanpy_kernel_goal_continue"]
 def goalContinue (target branch : GoalState) :
     IO (Option GoalState × String) := do
-  match target.continue branch with
-  | .ok s => return (some s, "")
-  | .error e => return (none, e)
+  let r := match target.continue branch with
+    | .ok s => (some s, "")
+    | .error e => (none, e)
+  keepAlive target
+  keepAlive branch
+  return r
 
 /-! ## Prograde tactics (try_have / try_let / try_define / try_draft)
 
-The full implementations live in `LeanPy/Kernel/Goal.lean`; these are
-the @[python]-facing wrappers that take string arguments and return
+The implementations are in `Pantograph.Library`; these are the
+@[python]-facing wrappers that take string arguments and return
 the (status-string × Option GoalState) pair used elsewhere. -/
 
 /-- `have h : type := ?` — introduce a new hypothesis named `binderName` of
@@ -442,56 +468,70 @@ the parsed `type`, leaving a fresh subgoal for its value. -/
 @[python "leanpy_kernel_goal_try_have"]
 def goalTryHave (state : GoalState) (binderName : String) (typeStr : String) :
     IO (String × Option GoalState) := do
-  match state.mainGoal? with
-  | none => return ("invalidAction\nno goals", none)
-  | some g =>
-    runGoalTactic state (state.tryHave (.focus g) binderName.toName typeStr)
+  let r ← match state.mainGoal? with
+    | none => pure ("invalidAction\nno goals", none)
+    | some g =>
+      runGoalTactic state (state.tryHave (.focus g) binderName.toName typeStr)
+  keepAlive state
+  return r
 
 /-- `let n : type := ?` — like `have` but introduces a `let` binding. -/
 @[python "leanpy_kernel_goal_try_let"]
 def goalTryLet (state : GoalState) (binderName : String) (typeStr : String) :
     IO (String × Option GoalState) := do
-  match state.mainGoal? with
-  | none => return ("invalidAction\nno goals", none)
-  | some g =>
-    runGoalTactic state (state.tryLet (.focus g) binderName.toName typeStr)
+  let r ← match state.mainGoal? with
+    | none => pure ("invalidAction\nno goals", none)
+    | some g =>
+      runGoalTactic state (state.tryLet (.focus g) binderName.toName typeStr)
+  keepAlive state
+  return r
 
 /-- `let n : _ := expr` — introduce a definition with the given expression. -/
 @[python "leanpy_kernel_goal_try_define"]
 def goalTryDefine (state : GoalState) (binderName : String) (exprStr : String) :
     IO (String × Option GoalState) := do
-  match state.mainGoal? with
-  | none => return ("invalidAction\nno goals", none)
-  | some g =>
-    runGoalTactic state (state.tryDefine (.focus g) binderName.toName exprStr)
+  let r ← match state.mainGoal? with
+    | none => pure ("invalidAction\nno goals", none)
+    | some g =>
+      runGoalTactic state (state.tryDefine (.focus g) binderName.toName exprStr)
+  keepAlive state
+  return r
 
 /-- Draft an expression possibly containing `sorry`s; remaining `sorry`s
 become subgoals. Used for top-down proof sketches. -/
 @[python "leanpy_kernel_goal_try_draft"]
 def goalTryDraft (state : GoalState) (exprStr : String) :
     IO (String × Option GoalState) := do
-  match state.mainGoal? with
-  | none => return ("invalidAction\nno goals", none)
-  | some g =>
-    runGoalTactic state (state.tryDraft (.focus g) exprStr)
+  let r ← match state.mainGoal? with
+    | none => pure ("invalidAction\nno goals", none)
+    | some g =>
+      runGoalTactic state (state.tryDraft (.focus g) exprStr)
+  keepAlive state
+  return r
 
 /-! ## Goal state introspection extras -/
 
 /-- All goal mvar names in the order pantograph reports them. -/
 @[python "leanpy_kernel_goal_state_goal_names"]
-def goalStateGoalNames (state : GoalState) : IO (Array String) :=
-  return state.goalsArray.map (·.name.toString)
+def goalStateGoalNames (state : GoalState) : IO (Array String) := do
+  let r := state.goalsArray.map (·.name.toString)
+  keepAlive state
+  return r
 
 /-- Names of parent metavariables (those that became assigned/fragmented to
 produce this state). -/
 @[python "leanpy_kernel_goal_state_parent_names"]
-def goalStateParentNames (state : GoalState) : IO (Array String) :=
-  return state.parentMVars.toArray.map (·.name.toString)
+def goalStateParentNames (state : GoalState) : IO (Array String) := do
+  let r := state.parentMVars.toArray.map (·.name.toString)
+  keepAlive state
+  return r
 
 /-- The root mvar's name. -/
 @[python "leanpy_kernel_goal_state_root_name"]
-def goalStateRootName (state : GoalState) : IO String :=
-  return state.root.name.toString
+def goalStateRootName (state : GoalState) : IO String := do
+  let r := state.root.name.toString
+  keepAlive state
+  return r
 
 /-! ## Replay / subsume
 
@@ -506,37 +546,41 @@ goal state on success, or an error string. -/
 @[python "leanpy_kernel_goal_replay"]
 def goalReplay (dst src src' : GoalState) :
     IO (Option GoalState × String) := do
-  match (← envRef.get) with
-  | none => return (none, "no environment loaded")
-  | some env =>
-    let ctx ← freshCoreContext
-    let cs : Core.State := { env }
-    try
-      let (r, _) ← (GoalState.replay dst src src').toIO ctx cs
-      return (some r, "")
-    catch e => return (none, s!"replay failed: {e.toString}")
+  let r ← match (← envRef.get) with
+    | none => pure (none, "no environment loaded")
+    | some env =>
+      let ctx ← freshCoreContext
+      let cs : Core.State := { env }
+      try
+        let (r, _) ← (GoalState.replay dst src src').toIO ctx cs
+        pure (some r, "")
+      catch e => pure (none, s!"replay failed: {e.toString}")
+  keepAlive dst; keepAlive src; keepAlive src'
+  return r
 
 /-- Subsume the given goal in `state` by some candidate from `candidates`.
 Returns `(subsumption, optional new state, optional subsumptor mvar name)`. -/
 @[python "leanpy_kernel_goal_subsume"]
 def goalSubsume (state : GoalState) (goalName : String) (candidateNames : Array String)
     : IO (String × Option GoalState × String) := do
-  match (← envRef.get) with
-  | none => return ("none", none, "")
-  | some env =>
-    let ctx ← freshCoreContext
-    let cs : Core.State := { env }
-    let goal : MVarId := { name := goalName.toName }
-    let cands := candidateNames.map fun s => ({ name := s.toName } : MVarId)
-    try
-      let (((sub, next?, sub?), _)) ← ((state.subsume goal cands).toIO ctx cs)
-      let label := match sub with
-        | .none => "none"
-        | .subsumed => "subsumed"
-        | .cycle => "cycle"
-      let subName := sub?.map (·.name.toString) |>.getD ""
-      return (label, next?, subName)
-    catch e => return ("error", none, e.toString)
+  let r ← match (← envRef.get) with
+    | none => pure ("none", none, "")
+    | some env =>
+      let ctx ← freshCoreContext
+      let cs : Core.State := { env }
+      let goal : MVarId := { name := goalName.toName }
+      let cands := candidateNames.map fun s => ({ name := s.toName } : MVarId)
+      try
+        let (((sub, next?, sub?), _)) ← ((state.subsume goal cands).toIO ctx cs)
+        let label := match sub with
+          | .none => "none"
+          | .subsumed => "subsumed"
+          | .cycle => "cycle"
+        let subName := sub?.map (·.name.toString) |>.getD ""
+        pure (label, next?, subName)
+      catch e => pure ("error", none, e.toString)
+  keepAlive state
+  return r
 
 /-! ## Pretty-printing and serialisation -/
 
@@ -578,10 +622,12 @@ unsafe def envUnpickle (path : String) : IO String := do
 
 @[python "leanpy_kernel_goal_pickle"]
 unsafe def goalPickle (state : GoalState) (path : String) : IO String := do
-  try
+  let r ← try
     goalStatePickle state (System.FilePath.mk path) none
-    return ""
-  catch e => return e.toString
+    pure ""
+  catch e => pure e.toString
+  keepAlive state
+  return r
 
 @[python "leanpy_kernel_goal_unpickle"]
 unsafe def goalUnpickle (path : String) : IO (Option GoalState × String) := do
@@ -649,21 +695,21 @@ def frontendCollectSorrys (source : String) : IO (Option GoalState × String) :=
 @[python "leanpy_kernel_delab_unfold_aux_lemmas"]
 def delabUnfoldAuxLemmas (src : String) : IO String := runCore do
   withTerm src fun expr => do
-    let r ← LeanPy.Kernel.unfoldAuxLemmas expr
+    let r ← unfoldAuxLemmas expr
     ppExprStr r
 
 /-- Unfold matchers in an expression's textual representation. -/
 @[python "leanpy_kernel_delab_unfold_matchers"]
 def delabUnfoldMatchers (src : String) : IO String := runCore do
   withTerm src fun expr => do
-    let r ← LeanPy.Kernel.unfoldMatchers expr
+    let r ← unfoldMatchers expr
     ppExprStr r
 
 /-- Instantiate all metavariables and aux/matcher unfolds. -/
 @[python "leanpy_kernel_delab_instantiate_all"]
 def delabInstantiateAll (src : String) : IO String := runCore do
   withTerm src fun expr => do
-    let r ← LeanPy.Kernel.instantiateAll expr
+    let r ← instantiateAll expr
     ppExprStr r
 
 /-- Convert any `Expr.proj` nodes to their applied form. -/
@@ -671,21 +717,23 @@ def delabInstantiateAll (src : String) : IO String := runCore do
 def delabExprProjToApp (src : String) : IO String := runCore do
   let env ← getEnv
   withTerm src fun expr => do
-    let r := LeanPy.Kernel.exprProjToApp env expr
+    let r := exprProjToApp env expr
     ppExprStr r
 
 /-- Diagnostic dump of a goal state's internals (env names + mvar table). -/
 @[python "leanpy_kernel_goal_state_diag"]
 def goalStateDiag (state : GoalState) : IO String := do
-  match (← envRef.get) with
-  | none => return "no environment loaded"
-  | some env =>
-    let ctx ← freshCoreContext
-    let cs : Core.State := { env }
-    try
-      let act : CoreM String := state.diag none {}
-      let (s, _) ← act.toIO ctx cs
-      return s
-    catch e => return s!"<error: {e.toString}>"
+  let r ← match (← envRef.get) with
+    | none => pure "no environment loaded"
+    | some env =>
+      let ctx ← freshCoreContext
+      let cs : Core.State := { env }
+      try
+        let act : CoreM String := state.diag none {}
+        let (s, _) ← act.toIO ctx cs
+        pure s
+      catch e => pure s!"<error: {e.toString}>"
+  keepAlive state
+  return r
 
 end LeanPy.Kernel

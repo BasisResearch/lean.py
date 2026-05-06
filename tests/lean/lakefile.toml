@@ -8,7 +8,7 @@ path = "../../"
 
 [[lean_lib]]
 name = "TestLib"
-moreLinkObjs = ["LeanPy/LeanPy:static", "LeanPy/leanPyNative:static"]
+moreLinkObjs = ["LeanPy/LeanPy:static", "LeanPy/leanPyNative:static", "Pantograph/Pantograph:static"]
 precompileModules = true
 defaultFacets = ["shared"]
 moreLinkArgs = [
