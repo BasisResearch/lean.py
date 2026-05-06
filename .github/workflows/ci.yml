@@ -112,12 +112,13 @@ jobs:
       - name: leaks(1) check
         run: tests/leaks_check.sh
 
-  # Linux-only: build an ASAN-instrumented libleanshared.so, then run
-  # the test suite with LEANPY_LIBLEAN pointing at it.
+  # Linux-only: run the test suite with ASAN via LD_PRELOAD.
+  # This catches memory errors in our C bridge and ctypes FFI layer
+  # without needing to rebuild Lean from source.
   asan-linux:
     runs-on: ubuntu-latest
     needs: test
-    continue-on-error: true   # ASAN may flag known upstream issues
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Install elan
@@ -129,26 +130,6 @@ jobs:
         run: |
           elan toolchain install $(cat lean-toolchain)
           elan default $(cat lean-toolchain)
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake pkg-config libgmp-dev libuv1-dev
-      - name: Build ASAN-instrumented Lean runtime
-        run: |
-          LEAN_VERSION=$(cat lean-toolchain | sed 's|.*:||')
-          git clone --depth 1 --branch "$LEAN_VERSION" https://github.com/leanprover/lean4.git lean4-src
-          cd lean4-src
-          # Patch CMakeLists to prevent ASAN flags from propagating to stage0
-          sed -i 's/elseif((var MATCHES "CMAKE_.*") AND NOT (var MATCHES "CMAKE_BUILD_TYPE") AND NOT (var MATCHES "CMAKE_HOME_DIRECTORY"))/elseif((var MATCHES "CMAKE_.*") AND NOT (var MATCHES "CMAKE_BUILD_TYPE") AND NOT (var MATCHES "CMAKE_HOME_DIRECTORY") AND NOT (var MATCHES "CMAKE_C_FLAGS") AND NOT (var MATCHES "CMAKE_CXX_FLAGS") AND NOT (var MATCHES "CMAKE_EXE_LINKER_FLAGS") AND NOT (var MATCHES "CMAKE_SHARED_LINKER_FLAGS"))/' CMakeLists.txt
-          mkdir -p build/release && cd build/release
-          cmake -G "Unix Makefiles" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
-            -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
-            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" \
-            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address" \
-            ../../
-          make -j$(nproc) stage1 || true  # best-effort
       - name: Install uv + deps
         uses: astral-sh/setup-uv@v5
       - run: uv python install 3.12
@@ -158,23 +139,18 @@ jobs:
         run: |
           lake build
           (cd tests/lean && lake build)
-      - name: Run tests under ASAN
+      - name: Run tests under ASAN (LD_PRELOAD)
         run: |
-          ASAN_LIB=$(find lean4-src/build -name 'libleanshared.so' -print -quit 2>/dev/null || true)
-          if [ -z "$ASAN_LIB" ]; then
-            echo "::warning::ASAN libleanshared not found; skipping ASAN tests"
-            exit 0
-          fi
-          echo "Using ASAN lib: $ASAN_LIB"
-          # Find the matching libasan.so
           LIBASAN=$(gcc -print-file-name=libasan.so)
-          LEANPY_LIBLEAN="$ASAN_LIB" \
-          ASAN_OPTIONS=detect_leaks=0:halt_on_error=0 \
+          echo "Using libasan: $LIBASAN"
+          LEAN_SYSROOT=$(lean --print-prefix)
+          LD_LIBRARY_PATH="$LEAN_SYSROOT/lib/lean" \
           LD_PRELOAD="$LIBASAN" \
+          ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
           uv run pytest tests -v --tb=short 2>&1 | tee asan.log
-          # Surface any ASAN errors as annotations
           if grep -q "ERROR: AddressSanitizer" asan.log; then
-            echo "::warning::ASAN detected errors — see log for details"
+            echo "::error::ASAN detected memory errors"
+            exit 1
           fi
 
   # Linux-only: run the test suite under valgrind for stronger coverage
