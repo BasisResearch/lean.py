@@ -261,35 +261,67 @@ class LeanLibrary:
             run_command(["lake", "build"], cwd=lake_path)
 
         ext = shared_lib_extension()
-        lib_dir = lake_path / ".lake" / "build" / "lib"
-        if not lib_dir.is_dir():
-            raise FileNotFoundError(
-                f"{lib_dir} does not exist; run `lake build` in {lake_path} "
-                f"or pass build=True"
+        build_root = lake_path / ".lake" / "build"
+        lib_dir = build_root / "lib"
+
+        def _find(name: str) -> Path | None:
+            """Look for `lib{name}.<ext>` first in the standard location,
+            then anywhere under `.lake/build/`. Some Lean toolchains
+            place output libs in subdirectories (e.g. `lib/lean/`)."""
+            candidate = lib_dir / f"lib{name}{ext}"
+            if candidate.exists():
+                return candidate
+            if not build_root.is_dir():
+                return None
+            for p in build_root.rglob(f"lib{name}{ext}"):
+                if not p.name.endswith((".hash", ".trace")):
+                    return p
+            return None
+
+        def _diagnostic() -> str:
+            if not build_root.is_dir():
+                return f"{build_root} does not exist (lake build did not run or failed)"
+            entries = sorted(
+                str(p.relative_to(build_root))
+                for p in build_root.rglob("*")
+                if p.is_file()
             )
+            return f"contents of {build_root}: {entries[:50]}"
 
         if library_name is not None:
-            candidate = lib_dir / f"lib{library_name}{ext}"
-            if not candidate.exists():
+            found = _find(library_name)
+            if found is None and build:
+                # Some Lake versions don't honour `defaultFacets = ["shared"]`
+                # in lakefile.toml; ask for the shared facet explicitly.
+                try:
+                    run_command(["lake", "build", f"{library_name}:shared"],
+                                cwd=lake_path)
+                except Exception:
+                    pass
+                found = _find(library_name)
+            if found is None:
                 raise FileNotFoundError(
-                    f"{candidate} not found; check the library name or "
-                    f"run `lake build`"
+                    f"lib{library_name}{ext} not found under {build_root}; "
+                    f"check the library name or run `lake build`. {_diagnostic()}"
                 )
-            return cls(candidate, library_name)
+            return cls(found, library_name)
 
         # Auto-detect: pick the unique shared lib (excluding .hash/.trace).
-        shared = [
-            p for p in lib_dir.glob(f"lib*{ext}")
-            if p.suffix == ext and not p.name.endswith((".hash", ".trace"))
-        ]
+        shared = []
+        if build_root.is_dir():
+            shared = [
+                p for p in build_root.rglob(f"lib*{ext}")
+                if p.suffix == ext and not p.name.endswith((".hash", ".trace"))
+            ]
         if not shared:
             raise FileNotFoundError(
-                f"no shared library found under {lib_dir}; run `lake build`"
+                f"no shared library found under {build_root}; run `lake build`. "
+                f"{_diagnostic()}"
             )
         if len(shared) > 1:
             names = ", ".join(p.stem.removeprefix("lib") for p in shared)
             raise RuntimeError(
-                f"multiple shared libraries under {lib_dir} ({names}); pass "
+                f"multiple shared libraries under {build_root} ({names}); pass "
                 f"library_name to disambiguate"
             )
         return cls(shared[0], shared[0].stem.removeprefix("lib"))

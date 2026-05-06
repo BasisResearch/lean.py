@@ -58,8 +58,15 @@ jobs:
         run: lake build
 
       - name: Build TestLib (test fixture)
-        run: lake build
+        run: lake build TestLib:shared
         working-directory: tests/lean
+
+      - name: Inspect tests/lean build output (diagnostic)
+        if: always()
+        run: |
+          echo "--- tests/lean/.lake/build ---"
+          find tests/lean/.lake/build -maxdepth 5 -type f 2>/dev/null | sort | head -50
+          echo "------------------------------"
 
       - name: Set library path (for downstream commands)
         shell: bash
