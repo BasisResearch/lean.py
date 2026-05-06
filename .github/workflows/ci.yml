@@ -132,17 +132,23 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build
+          sudo apt-get install -y cmake pkg-config libgmp-dev libuv1-dev
       - name: Build ASAN-instrumented Lean runtime
         run: |
           LEAN_VERSION=$(cat lean-toolchain | sed 's|.*:||')
           git clone --depth 1 --branch "$LEAN_VERSION" https://github.com/leanprover/lean4.git lean4-src
-          mkdir lean4-build && cd lean4-build
-          cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            -DLEAN_EXTRA_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g3" \
-            -DLEAN_EXTRA_LINKER_FLAGS="-fsanitize=address" \
-            ../lean4-src/src
-          ninja leanshared || true  # best-effort: build just the shared lib
+          cd lean4-src
+          # Patch CMakeLists to prevent ASAN flags from propagating to stage0
+          sed -i 's/elseif((var MATCHES "CMAKE_.*") AND NOT (var MATCHES "CMAKE_BUILD_TYPE") AND NOT (var MATCHES "CMAKE_HOME_DIRECTORY"))/elseif((var MATCHES "CMAKE_.*") AND NOT (var MATCHES "CMAKE_BUILD_TYPE") AND NOT (var MATCHES "CMAKE_HOME_DIRECTORY") AND NOT (var MATCHES "CMAKE_C_FLAGS") AND NOT (var MATCHES "CMAKE_CXX_FLAGS") AND NOT (var MATCHES "CMAKE_EXE_LINKER_FLAGS") AND NOT (var MATCHES "CMAKE_SHARED_LINKER_FLAGS"))/' CMakeLists.txt
+          mkdir -p build/release && cd build/release
+          cmake -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address" \
+            ../../
+          make -j$(nproc) stage1 || true  # best-effort
       - name: Install uv + deps
         uses: astral-sh/setup-uv@v5
       - run: uv python install 3.12
@@ -154,14 +160,17 @@ jobs:
           (cd tests/lean && lake build)
       - name: Run tests under ASAN
         run: |
-          ASAN_LIB=$(find lean4-build -name 'libleanshared.so' -print -quit 2>/dev/null || true)
+          ASAN_LIB=$(find lean4-src/build -name 'libleanshared.so' -print -quit 2>/dev/null || true)
           if [ -z "$ASAN_LIB" ]; then
             echo "::warning::ASAN libleanshared not found; skipping ASAN tests"
             exit 0
           fi
+          echo "Using ASAN lib: $ASAN_LIB"
+          # Find the matching libasan.so
+          LIBASAN=$(gcc -print-file-name=libasan.so)
           LEANPY_LIBLEAN="$ASAN_LIB" \
           ASAN_OPTIONS=detect_leaks=0:halt_on_error=0 \
-          LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.8 \
+          LD_PRELOAD="$LIBASAN" \
           uv run pytest tests -v --tb=short 2>&1 | tee asan.log
           # Surface any ASAN errors as annotations
           if grep -q "ERROR: AddressSanitizer" asan.log; then

@@ -22,3 +22,26 @@
    ...
    fun:PyObject_Malloc
 }
+# uv (Rust binary) triggers uninitialised-value warnings in its own
+# thread pool.  These are harmless and not from our code.
+{
+   <uv-uninit-thread>
+   Memcheck:Cond
+   ...
+   obj:*uv*
+}
+{
+   <uv-uninit-thread-value>
+   Memcheck:Value8
+   ...
+   obj:*uv*
+}
+# GMP allocations inside libleanshared (Lean's bignum layer).
+{
+   <lean-gmp-possible>
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   ...
+   fun:__gmp*
+}
