@@ -265,17 +265,33 @@ class LeanLibrary:
         lib_dir = build_root / "lib"
 
         def _find(name: str) -> Path | None:
-            """Look for `lib{name}.<ext>` first in the standard location,
-            then anywhere under `.lake/build/`. Some Lean toolchains
-            place output libs in subdirectories (e.g. `lib/lean/`)."""
-            candidate = lib_dir / f"lib{name}{ext}"
-            if candidate.exists():
-                return candidate
+            """Locate `lib<name>.<ext>` produced by `lake build`.
+
+            Naming has shifted across Lake versions:
+              * old: `lib<name>.<ext>`
+              * newer (>= late 2025): `lib<package>_<name>.<ext>`,
+                so a same-name package + lib produces e.g.
+                `libTestLib_TestLib.dylib`.
+
+            Try the canonical path first, then any matching file under
+            `.lake/build/`, accepting both spellings."""
             if not build_root.is_dir():
                 return None
-            for p in build_root.rglob(f"lib{name}{ext}"):
-                if not p.name.endswith((".hash", ".trace")):
-                    return p
+            patterns = [
+                f"lib{name}{ext}",         # old layout
+                f"lib*_{name}{ext}",       # new: lib<pkg>_<name>.<ext>
+                f"lib{name}_*{ext}",       # mirror
+            ]
+            # Quick path: standard lib_dir, exact name.
+            primary = lib_dir / f"lib{name}{ext}"
+            if primary.exists():
+                return primary
+            for pat in patterns:
+                for p in build_root.rglob(pat):
+                    if p.name.endswith((".hash", ".trace", ".rsp")):
+                        continue
+                    if p.suffix == ext:
+                        return p
             return None
 
         def _diagnostic() -> str:
@@ -306,12 +322,13 @@ class LeanLibrary:
                 )
             return cls(found, library_name)
 
-        # Auto-detect: pick the unique shared lib (excluding .hash/.trace).
+        # Auto-detect: pick the unique shared lib (excluding .hash/.trace/.rsp).
         shared = []
         if build_root.is_dir():
             shared = [
                 p for p in build_root.rglob(f"lib*{ext}")
-                if p.suffix == ext and not p.name.endswith((".hash", ".trace"))
+                if p.suffix == ext
+                and not p.name.endswith((".hash", ".trace", ".rsp"))
             ]
         if not shared:
             raise FileNotFoundError(
@@ -324,7 +341,12 @@ class LeanLibrary:
                 f"multiple shared libraries under {build_root} ({names}); pass "
                 f"library_name to disambiguate"
             )
-        return cls(shared[0], shared[0].stem.removeprefix("lib"))
+        # The library_name we report should be the second half of
+        # `lib<pkg>_<name>` if that pattern is in play; otherwise the
+        # whole post-`lib` stem.
+        stem = shared[0].stem.removeprefix("lib")
+        name = stem.split("_", 1)[1] if "_" in stem else stem
+        return cls(shared[0], name)
 
     def __init__(self, dylib_path: str | os.PathLike, library_name: str):
         self.path = Path(dylib_path)
