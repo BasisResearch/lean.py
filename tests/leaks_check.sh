@@ -34,6 +34,7 @@ case "$(uname)" in
     PYTHONMALLOC=malloc valgrind \
       --leak-check=full \
       --show-leak-kinds=definite \
+      --errors-for-leak-kinds=definite \
       --suppressions="$REPO_ROOT/tests/python.supp" \
       --error-exitcode=1 \
       uv run pytest "${PYTEST_ARGS[@]}"
