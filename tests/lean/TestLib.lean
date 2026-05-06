@@ -86,11 +86,12 @@ def pythonEvalStr (src : String) : IO String := do
   str (← eval src)
 
 
+open LeanPy.Python in
 @[python "py_python_call1_int"]
 def pythonCall1Int (mod : String) (fn : String) (arg : Int) : IO Int := do
   init ()
   let m ← import_ mod
-  let f ← m.getAttr fn
+  let f ← getAttr m fn
   toInt (← call f #[← ofInt64 arg])
 
 /-! ### sympy / numpy demos used by the test suite -/
