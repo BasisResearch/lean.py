@@ -2,73 +2,123 @@
 
 Effortless interop between **Lean 4** and **Python**, in both directions.
 
-* **Lean → Python.** Annotate any Lean definition with `@[python "name"]`
-  and it becomes callable from Python with the right marshalled types.
-  `derive_python` exposes inductives / structures as Python wrapper
-  classes whose constructors round-trip through the C ABI.
-* **Python → Lean.** A built-in `LeanPy.Python` namespace gives Lean
-  code an opaque `Py` external object plus the usual operations
-  (`import_`, `eval`, `exec`, `getAttr`, `call`, …). CPython is loaded
+* **Lean -> Python.** Annotate any Lean definition with `@[python "name"]`
+  and call it from Python with automatic type marshalling.
+  `derive_python` exposes inductives and structures as Python constructors.
+* **Python -> Lean.** `LeanPy.Python` gives Lean code a `Py` type with
+  `import_`, `eval`, `exec`, `getAttr`, `call`, etc. CPython is loaded
   lazily via `dlopen`.
-* **Pantograph-style kernel facade.** `LeanPy.Kernel` exposes
-  `loadEnv`, `inferType`, `prettyPrint`, `whnf`, etc. so a host Python
-  process can drive Lean's elaborator without spawning a subprocess.
+* **Kernel facade.** `LeanPy.Kernel` wraps the
+  [Pantograph](https://github.com/leanprover/Pantograph) library so a
+  Python process can drive Lean's type-checker, elaborator, and tactic
+  engine without spawning a subprocess.
 
 ## Install
 
-### Python side (`uv`)
+### Python side
 
 ```bash
-uv pip install "git+https://github.com/kiranandcode/lean.py"
+uv pip install "lean_py @ git+https://github.com/kiranandcode/lean.py"
 ```
 
-or, in a `pyproject.toml`:
+or in `pyproject.toml`:
 
 ```toml
 [project]
 dependencies = ["lean_py @ git+https://github.com/kiranandcode/lean.py"]
 ```
 
-The Python package locates `lean.h` and `libleanshared.<ext>` from the
-active Lean toolchain at import time; it does not bundle Lean itself.
-You'll need a working `elan` / `lake` / `lean` installation on PATH.
+The Python package discovers `lean.h` and `libleanshared` from the active
+Lean toolchain at import time. You need a working
+[elan](https://github.com/leanprover/elan) install (`lean` on PATH).
 
-### Lean side (`lake`)
+### Lean side
 
 Add to your `lakefile.toml`:
 
 ```toml
 [[require]]
 name = "LeanPy"
-git = "https://github.com/kiranandcode/lean.py"
+git  = "https://github.com/kiranandcode/lean.py"
 
 [[lean_lib]]
 name = "MyLib"
-moreLinkObjs = ["LeanPy/LeanPy:static", "LeanPy/leanPyNative:static"]
+# These three lines are required:
+moreLinkObjs = [
+  "LeanPy/LeanPy:static",
+  "LeanPy/leanPyNative:static",
+  "Pantograph/Pantograph:static",
+]
 precompileModules = true
 defaultFacets = ["shared"]
-moreLinkArgs = [
-  "-Wl,-headerpad_max_install_names",
-]
+# macOS only — allows install_name_tool to rewrite @rpath references:
+moreLinkArgs = ["-Wl,-headerpad_max_install_names"]
 ```
 
-The `moreLinkObjs` line bundles the LeanPy static archive and the C
-bridge into your dylib, which is what Python loads. The `headerpad`
-flag is needed on macOS so that `install_name_tool` can rewrite
-`@rpath/...` references at load time (see `docs/ARCHITECTURE.md` for
-details).
+> **Why three static libs?** `LeanPy:static` is the Lean module,
+> `leanPyNative:static` is the C bridge (`python_bridge.c`), and
+> `Pantograph:static` is the proof-assistant kernel that `LeanPy.Kernel`
+> depends on. All three must be linked into the shared library that
+> Python loads.
 
-A complete minimal project lives at [`examples/01_basic`](./examples/01_basic).
+Then build:
 
-## Quick example
+```bash
+lake build           # fetches LeanPy + Pantograph, compiles everything
+```
+
+## Using additional Lake dependencies
+
+If your project depends on other Lean libraries (Batteries, Mathlib,
+your own packages, etc.), add them as normal `[[require]]` entries in
+your `lakefile.toml`. Any library whose symbols are called at runtime
+through the Python-loaded `.so`/`.dylib` must also appear in
+`moreLinkObjs`:
+
+```toml
+[[require]]
+name = "LeanPy"
+git  = "https://github.com/kiranandcode/lean.py"
+
+[[require]]
+name = "batteries"
+git  = "https://github.com/leanprover-community/batteries"
+rev  = "main"
+
+[[lean_lib]]
+name = "MyLib"
+moreLinkObjs = [
+  "LeanPy/LeanPy:static",
+  "LeanPy/leanPyNative:static",
+  "Pantograph/Pantograph:static",
+  # Add any additional deps whose symbols you call at runtime:
+  "batteries/Batteries:static",
+]
+precompileModules = true
+defaultFacets = ["shared"]
+moreLinkArgs = ["-Wl,-headerpad_max_install_names"]
+```
+
+**Rule of thumb:** if `lake build` succeeds but Python fails with
+`symbol not found`, add the missing package to `moreLinkObjs` as
+`"<package>/<LibName>:static"`. The pattern is always
+`"<lake-package-name>/<lean_lib-name>:static"`.
+
+If you only `import` a library at compile time (e.g. for notation or
+macros) but don't call its functions at runtime, you don't need it in
+`moreLinkObjs`.
+
+## Quick start
+
+### 1. Write Lean code
 
 ```lean
--- examples/01_basic/lean/Basic.lean
+-- MyLib.lean
 import LeanPy
 open LeanPy
 
-@[python "py_increment"]
-def increment (x : Int) : Int := x + 1
+@[python "add"]
+def add (a b : Int) : Int := a + b
 
 structure Point where
   x : Int
@@ -76,207 +126,184 @@ structure Point where
 
 derive_python Point
 
-@[python "py_origin"]
-def origin (_ : Unit) : Point := ⟨0, 0⟩
+@[python "origin"]
+def origin (_ : Unit) : Point := { x := 0, y := 0 }
 
-#export_python_registry "Basic"
+#export_python_registry "MyLib"   -- makes the registry visible to Python
 ```
 
+### 2. Call from Python
+
 ```python
-# Python side
 from lean_py import LeanLibrary
 
-# Path to the Lake project; finds .lake/build/lib/lib<Name>.<ext>.
-# Pass build=True to also run `lake build` first.
-lib = LeanLibrary.from_lake("examples/01_basic/lean", "Basic", build=True)
-print(lib.increment(7))    # → 8
-print(lib.Point(3, 4))     # → Point.mk(3, 4)
-print(lib.origin(None))    # → Point.mk(0, 0)
+lib = LeanLibrary.from_lake("path/to/lake/project", "MyLib", build=True)
+
+lib.add(3, 4)          # 7
+lib.origin(None)       # Point.mk(0, 0)
+lib.Point(10, 20)      # Point.mk(10, 20) — constructed in Python
 ```
 
-If you've already built the dylib and have the path, the lower-level
-constructor still works:
+`from_lake` finds the `.lake/build/lib/lib<Name>.{dylib,so}` produced by
+`lake build`. Pass `build=True` to run `lake build` automatically.
 
-```python
-lib = LeanLibrary("examples/01_basic/lean/.lake/build/lib/libBasic.dylib", "Basic")
-```
-
-## Python in Lean (sympy / numpy demo)
+## Calling Python from Lean
 
 ```lean
 open LeanPy.Python in
-@[python "py_sympy_simplify"]
-def sympySimplify (expr : String) : IO String := do
-  init ()                       -- lazy: dlopens libpython once
-  let sympy ← import_ "sympy"
-  let f     ← getAttr sympy "simplify"
-  let e     ← ofString expr
-  str (← call f #[e])
+@[python "numpy_dot"]
+def numpyDot (xs ys : Array Int) : IO Int := do
+  init ()                         -- dlopens libpython once
+  let np ← import_ "numpy"
+  let dot ← np.getAttr "dot"
+  let a ← Py.ofList (xs.toList.map Py.ofInt)
+  let b ← Py.ofList (ys.toList.map Py.ofInt)
+  (← dot.call #[← a, ← b]).toInt
 ```
 
 ```python
-print(lib.sympySimplify("(x**2 - 1)/(x - 1)"))   # "x + 1"
+lib.numpy_dot([1, 2, 3], [4, 5, 6])   # 32
 ```
 
-## How it works
+## Kernel facade (Pantograph)
 
-1. The `@[python "name"]` attribute (`LeanPy/Attr.lean`) sets `@[export]`
-   and registers metadata (declaration name, parameter `TypeRepr`s, return
-   type) in a `SimplePersistentEnvExtension`.
-2. `derive_python TypeName` walks an inductive's constructors and adds
-   them to the same registry — no new Lean declarations are emitted.
-3. `#export_python_registry "<prefix>"` (`LeanPy/Export.lean`) reads the
-   compile-time registry, JSON-serialises it, and emits two
-   `@[export]`'d functions returning that JSON to Python.
-4. On the Python side, `LeanLibrary("foo.dylib", "Foo")` dlopens the
-   library, calls `Foo_funcs_json()` / `Foo_types_json()`, builds
-   `TypeWrapper`s for each registered type, and exposes one Python
-   callable per registered Lean function.
-5. The C bridge (`LeanPy/native/python_bridge.c`) implements the
-   Python-in-Lean direction: a `lean_external_class` over `PyObject*`
-   plus `lean_py_*` externs that the Lean side calls.
-
-## Examples
-
-```
-examples/
-  01_basic/             tiny end-to-end demo
-  02_pantograph_kernel/ Pantograph-style Lean kernel facade
-  03_numpy_typed/       numpy with Lean-checked dependent shapes
-  04_sympy_tactic/      a real Lean tactic backed by SymPy
-  05_knuckledragger/    Knuckledragger / Z3 as a Lean tactic
-```
-
-Each example is a self-contained Lake + `uv` project — see its
-`README.md` for run instructions.
-
-## Bidirectional introspection
-
-Lean's kernel ADTs (`Lean.Expr`, `Lean.Name`, `Lean.Level`, `Lean.Syntax`,
-`Lean.Literal`, `Lean.BinderInfo`, …) are exposed to Python as
-fully-typed values via `derive_python` (in `LeanPy/Reflect.lean`). So:
+Drive Lean's type-checker and tactic engine from Python:
 
 ```python
 from lean_py import LeanLibrary
-lib = LeanLibrary.from_lake("path/to/project", "MyLib")
+from lean_py.kernel import Kernel
 
-# Build a Lean.Expr in Python
-Name = lib.Name
-Expr = lib.Expr
-nat = Name.str(Name.anonymous, "Nat")
-e = Expr.app(Expr.const(Name.str(nat, "succ"), []),
-             Expr.const(Name.str(nat, "zero"), []))
+lib = LeanLibrary.from_lake("path/to/project", "MyLib", build=True)
+k = Kernel(lib)
+k.load(["Init"])
 
-# Hand it to a @[python] Lean function expecting Lean.Expr
-print(lib.describe_expr(e))
+# Create a goal and run tactics
+state = k.goal_create("∀ n : Nat, n + 0 = n")
+print(state.pretty())             # ⊢ ∀ (n : Nat), n + 0 = n
+
+result = state.try_tactic("intro n")
+print(result.state.pretty())      # n : Nat\n⊢ n + 0 = n
+
+result2 = result.state.try_tactic("simp")
+print(result2.state.is_solved())  # True
 ```
 
-Going the other way, a `Py` returned from Lean lands as a *live* Python
-value (not an opaque handle):
+The kernel API also exposes environment introspection (`catalog`,
+`decl_type`, `module_of`, ...), expression elaboration (`infer_type`,
+`pretty_print`, `whnf`), frontend processing, and goal-state pickling.
+See `lean_py/kernel.py` for the full surface.
+
+## Bidirectional introspection
+
+Lean's kernel ADTs (`Lean.Expr`, `Lean.Name`, `Lean.Level`,
+`Lean.Syntax`, ...) are exposed as Python values via `derive_python`
+(registered in `LeanPy/Reflect.lean`):
 
 ```python
-result = lib.makeList123(None)   # Lean returns a Py wrapping [1, 2, 3]
-print(type(result), result)      # <class 'list'> [1, 2, 3]
+Name = lib.Name
+Expr = lib.Expr
+
+# Build a Lean.Expr tree in Python
+nat  = Name.str(Name.anonymous, "Nat")
+succ = Expr.const(Name.str(nat, "succ"), [])
+zero = Expr.const(Name.str(nat, "zero"), [])
+e    = Expr.app(succ, zero)       # Nat.succ Nat.zero
+
+# Pass it to any @[python] function expecting Lean.Expr
+lib.describe_expr(e)
 ```
 
-See `tests/test_introspection.py` and `docs/ARCHITECTURE.md` for the
-full set of registered types.
+Going the other way, `Py` values returned from Lean land as live Python
+objects:
+
+```python
+lib.makeList123(None)   # [1, 2, 3]  (not an opaque handle)
+```
 
 ## Exceptions
 
-Errors propagate with type information in both directions:
+Errors carry type information across the boundary:
 
 ```python
 from lean_py import LeanError, LeanPyCallbackError
 
 try:
     lib.some_io_function()
-except LeanPyCallbackError as e:    # CPython error inside a Lean callback
+except LeanPyCallbackError as e:    # Python error inside a Lean callback
     print(e.python_type, e.python_message)
-except LeanError as e:              # any other Lean IO error
+except LeanError as e:              # Lean IO error
     print(e.kind, e.message)
 ```
 
-Lean side can recover via `LeanPy.Python.tryCatchPy`. Full reference at
-[`docs/EXCEPTIONS.md`](docs/EXCEPTIONS.md).
+## Examples
 
-## Pantograph-equivalent kernel
-
-`LeanPy/Kernel.lean` and `LeanPy/Kernel/*.lean` build on the
-[Pantograph](https://github.com/leanprover/Pantograph) library (pulled
-in as a Lake dependency) and expose its operations layer as a
-`@[python]`-callable surface — goal state, tactic execution, frontend
-processing, environment introspection, expression elaboration,
-serialisation, delab. The high-level wrapper lives at
-`lean_py/kernel.py`:
-
-```python
-from lean_py import LeanLibrary
-from lean_py.kernel import Kernel
-
-lib = LeanLibrary.from_lake("path", "MyLib")
-k = Kernel(lib)
-k.init_search("")
-k.load(["Init"])
-
-state = k.goal_create("∀ n : Nat, n + 0 = n")
-print(state.pretty())
-result = state.try_tactic("intro n")
-if result.ok:
-    print(result.state.pretty())
 ```
+examples/
+  01_basic/             tiny end-to-end demo
+  02_pantograph_kernel/ Pantograph-style kernel facade
+  03_numpy_typed/       numpy with Lean-checked dependent shapes
+  04_sympy_tactic/      a real Lean tactic backed by SymPy (Expr-based)
+  05_knuckledragger/    Knuckledragger / Z3 as a Lean tactic
+```
+
+Each is a self-contained Lake + uv project.
 
 ## Tests
 
 ```bash
 uv sync --dev
 lake build
-(cd tests/lean && lake build)
+cd tests/lean && lake build TestLib:shared && cd ../..
 uv run pytest tests -v
 ```
 
-There are 125 passing tests covering FFI primitives, all marshalled
-types, the typed exception path, bidirectional introspection (ADT
-mirrors + live Py round-trip), the kernel facade (goal state lifecycle,
-tactic execution, environment introspection, elaboration, frontend
-processing, serialisation), sympy / numpy demos through Lean, and
-refcount stress.
+125 tests covering: FFI primitives, all marshalled types, typed
+exceptions, bidirectional introspection, kernel facade (goal state,
+tactics, environment, elaboration, frontend, serialisation), Python-in-Lean
+demos, and refcount stress tests.
 
-For a heavier memory check (`leaks` on macOS, `valgrind` on Linux):
+## How it works
 
-```bash
-tests/leaks_check.sh
-```
-
-## CI
-
-`.github/workflows/ci.yml` runs the suite on `ubuntu-latest` and
-`macos-latest` against three Lean toolchains (the pinned default plus a
-prior stable and `nightly`), and runs separate `leaks` (macOS) and
-`valgrind` (Linux) jobs.
+1. `@[python "name"]` sets `@[export]` and registers metadata (parameter
+   types, return type) in a persistent env extension.
+2. `derive_python TypeName` walks an inductive's constructors and adds
+   them to the same registry.
+3. `#export_python_registry "Prefix"` serialises the registry to JSON and
+   emits two `@[export]`'d C functions returning that JSON.
+4. On the Python side, `LeanLibrary` dlopens the `.dylib`/`.so`, calls
+   `Prefix_funcs_json()` / `Prefix_types_json()`, builds `TypeWrapper`s,
+   and exposes one Python callable per registered function.
+5. The C bridge (`LeanPy/native/python_bridge.c`) implements the
+   Python-in-Lean direction: a `lean_external_class` over `PyObject*`
+   plus `lean_py_*` externs.
 
 ## Repository layout
 
 ```
-LeanPy.lean              # entry point importing all modules
+LeanPy.lean              root import
 LeanPy/
-  Registry.lean          # persistent env extensions (funcs + types)
-  TypeRepr.lean          # JSON-serializable structural type model
-  Attr.lean              # @[python] attribute, derive_python command
-  Export.lean            # #export_python_registry command
-  Python.lean            # @[extern] declarations for the Py bridge
-  Kernel.lean            # Pantograph-equivalent kernel API
-  native/python_bridge.c # C side of the Python bridge
+  Attr.lean              @[python] attribute, derive_python
+  Export.lean            #export_python_registry
+  Python.lean            Py type + @[extern] bridge
+  Reflect.lean           derive_python for Lean.Expr/Name/Level/...
+  Kernel.lean            Pantograph kernel API
+  Kernel/                Frontend, Compat, ...
+  native/python_bridge.c C bridge (dlopen, no Python.h)
 
 lean_py/
-  __init__.py            # public Python API
-  _parse.py              # parses lean.h with pycparser
-  _runtime.py            # dynamic ctypes FFI built from lean.h
-  marshal.py             # Lean ↔ Python value marshalling
-  registry.py            # Python mirror of TypeRepr / FuncInfo
-  library.py             # LeanLibrary loader + wrapper generation
-  utils.py               # toolchain / lib path helpers
+  __init__.py            public API
+  library.py             LeanLibrary loader
+  marshal.py             Lean <-> Python marshalling
+  kernel.py              Kernel / GoalState / TacticResult
+  registry.py            TypeRepr / FuncInfo mirrors
+  _runtime.py            dynamic ctypes FFI from lean.h
+  _parse.py              lean.h parser (pycparser)
+  utils.py               toolchain helpers
 
-examples/                # self-contained demos (see ./examples/README.md)
-tests/                   # 125-test suite (FFI / marshal / kernel / Python-in-Lean / sympy / numpy / memory)
+examples/                self-contained demos
+tests/                   125-test suite
 ```
+
+## License
+
+Apache 2.0. See [LICENSE](LICENSE).

@@ -1,14 +1,25 @@
 [project]
 name = "lean_py"
 version = "0.1.0"
-description = "Effortless Python ↔ Lean 4 interop."
+description = "Effortless Python <-> Lean 4 interop."
 readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.12"
 dependencies = ["pycparser>=2.22"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Mathematics",
+  "Topic :: Software Development :: Compilers",
+]
+keywords = ["lean", "lean4", "theorem-prover", "ffi", "interop", "pantograph"]
 
 [project.urls]
 Homepage = "https://github.com/kiranandcode/lean.py"
 Repository = "https://github.com/kiranandcode/lean.py"
+Issues = "https://github.com/kiranandcode/lean.py/issues"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

@@ -280,6 +280,21 @@ class Marshaller:
 
     # -- public --------------------------------------------------------------
 
+    def decode_lean_obj(self, type_name: str, lean_obj: "LeanObj") -> LeanInductiveValue:
+        """Decode a ``LeanObj`` (raw ``lean_object*``) as a registered inductive.
+
+        This is the entry point for Path B (tactic): Lean wraps an ``Expr``
+        via ``Py.ofLeanObj``, Python receives a ``LeanObj``, and this method
+        walks the runtime representation using the type's registry metadata.
+        """
+        ti = self.registry.find_type(type_name)
+        if ti is None:
+            raise ValueError(f"Type {type_name!r} not found in registry")
+        # Borrow: _decode_inductive reads fields via lean_ctor_get (borrowed
+        # pointers) and lean_inc's each child, so we don't consume the handle.
+        self.ffi.lean_inc(lean_obj.ptr)
+        return self._decode_inductive(ti, lean_obj.ptr)
+
     def wrapper_for(self, t: TypeRepr) -> TypeWrapper:
         key = self._key(t)
         if key in self._cache:
