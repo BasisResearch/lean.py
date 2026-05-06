@@ -263,21 +263,57 @@ static const char *const PY_CANDIDATES[] = {
     NULL
 };
 
+/* Ask `python3` (or `python`) on PATH where its own libpython lives.
+ * This handles pyenv / uv-managed / framework Pythons whose libdir
+ * isn't on the dyld search path. The call is one-shot and only runs
+ * during the first `LeanPy.Python.init`. */
+static int try_python_subprocess(const char *python_exe) {
+    char cmd[512];
+    int n = snprintf(cmd, sizeof(cmd),
+        "%s -c 'import os, sysconfig; "
+        "libdir = sysconfig.get_config_var(\"LIBDIR\"); "
+        "soname = sysconfig.get_config_var(\"INSTSONAME\") "
+                 "or sysconfig.get_config_var(\"LDLIBRARY\"); "
+        "print(os.path.join(libdir, soname) "
+              "if libdir and soname else \"\")' 2>/dev/null",
+        python_exe);
+    if (n <= 0 || (size_t)n >= sizeof(cmd)) return 0;
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return 0;
+    char buf[4096];
+    char *line = fgets(buf, sizeof(buf), fp);
+    pclose(fp);
+    if (!line) return 0;
+    size_t len = strlen(line);
+    while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = '\0';
+    if (len == 0) return 0;
+    py_handle = dlopen(line, RTLD_NOW | RTLD_GLOBAL);
+    return py_handle != NULL;
+}
+
 static int try_load_python(void) {
-    /* First, prefer libpython already loaded into the process (this is
-     * the typical case when LeanPy runs inside a Python host — using a
-     * different libpython would cause two independent CPython VMs and
-     * immediate crashes). */
+    /* 1. Prefer libpython already loaded into the process (this is
+     *    the typical case when LeanPy runs inside a Python host —
+     *    using a different libpython would cause two independent
+     *    CPython VMs and immediate crashes). */
     py_handle = dlopen(NULL, RTLD_LAZY);
     if (py_handle && dlsym(py_handle, "Py_Initialize")) return 1;
     py_handle = NULL;
 
-    /* Honour LEANPY_LIBPYTHON if set. */
+    /* 2. Honour LEANPY_LIBPYTHON if set. */
     const char *override = getenv("LEANPY_LIBPYTHON");
     if (override && *override) {
         py_handle = dlopen(override, RTLD_NOW | RTLD_GLOBAL);
         if (py_handle) return 1;
     }
+
+    /* 3. Ask python3 / python on PATH for its libpython. Catches
+     *    pyenv, uv, and framework installs whose lib dir isn't in
+     *    the dyld search path. */
+    if (try_python_subprocess("python3")) return 1;
+    if (try_python_subprocess("python")) return 1;
+
+    /* 4. Fall back to common sonames (relies on dyld search path). */
     for (int i = 0; PY_CANDIDATES[i]; i++) {
         py_handle = dlopen(PY_CANDIDATES[i], RTLD_NOW | RTLD_GLOBAL);
         if (py_handle) return 1;

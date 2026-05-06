@@ -27,9 +27,16 @@ Storage and arithmetic are forwarded to numpy via `LeanPy.Python` —
 the phantom types are erased at runtime.
 
 There is no Python driver. `lake build` produces a binary at
-`lean/.lake/build/bin/demo`; the `run` wrapper at the example root
-just sets `LEANPY_LIBPYTHON` to a `libpython3.X` and runs the binary
-with `uv run` so numpy from the local venv is on `sys.path`.
+`lean/.lake/build/bin/demo`. The bridge auto-discovers `libpython` by
+asking `python3` on PATH for its sysconfig, so the binary runs as long
+as a `python3` with `numpy` is on PATH. The `run` wrapper at the
+example root just runs the binary under `uv run` so the local venv's
+numpy is picked up.
+
+You can also load `Main.lean` in VS Code and `#eval runDemo` directly
+— the same auto-discovery kicks in inside the Lean LSP. (If you're on
+a setup where `python3` on PATH doesn't have numpy installed, set
+`LEANPY_LIBPYTHON` and `PYTHONPATH` in your shell to override.)
 
 ## Layout
 
