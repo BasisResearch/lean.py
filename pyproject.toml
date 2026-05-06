@@ -1,10 +1,14 @@
 [project]
 name = "lean_py"
 version = "0.1.0"
-description = "Python-Lean interop made easy."
+description = "Effortless Python ↔ Lean 4 interop."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = ["pycparser>=2.22"]
+
+[project.urls]
+Homepage = "https://github.com/kiranandcode/lean.py"
+Repository = "https://github.com/kiranandcode/lean.py"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

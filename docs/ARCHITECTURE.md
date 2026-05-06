@@ -75,6 +75,7 @@ lean_py/
                                 _ensure_rpath, _InductiveType / _StructureType
   utils.py                      lean_lib_dir, find_lean_dynlib, etc.
 
-examples/lean/                  PyleanExample: end-to-end demo Lean library
+examples/                       self-contained demos (basic, kernel, numpy, sympy, knuckledragger)
 tests/                          37 tests + leaks_check.sh + python.supp
+tests/lean/                     TestLib: Lake project bundling every fixture used by the test suite
 ```

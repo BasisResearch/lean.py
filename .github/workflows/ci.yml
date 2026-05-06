@@ -33,7 +33,7 @@ jobs:
           else
             echo "name=${{ matrix.toolchain }}" >> "$GITHUB_OUTPUT"
             echo "${{ matrix.toolchain }}" > lean-toolchain
-            echo "${{ matrix.toolchain }}" > examples/lean/lean-toolchain
+            echo "${{ matrix.toolchain }}" > tests/lean/lean-toolchain
           fi
 
       - name: Install Lean toolchain
@@ -57,9 +57,9 @@ jobs:
       - name: Build root Lake project
         run: lake build
 
-      - name: Build PyleanExample
+      - name: Build TestLib (test fixture)
         run: lake build
-        working-directory: examples/lean
+        working-directory: tests/lean
 
       - name: Set library path (for downstream commands)
         shell: bash
@@ -99,7 +99,7 @@ jobs:
       - name: Build
         run: |
           lake build
-          (cd examples/lean && lake build)
+          (cd tests/lean && lake build)
       - name: leaks(1) check
         run: tests/leaks_check.sh
 
@@ -132,7 +132,7 @@ jobs:
       - name: Build
         run: |
           lake build
-          (cd examples/lean && lake build)
+          (cd tests/lean && lake build)
       - name: valgrind check
         run: tests/leaks_check.sh
         env:

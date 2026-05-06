@@ -32,7 +32,7 @@ from lean_py.base_types import LeanObject
 from lean_py.lean_ffi import get_lean_ffi
 from lean_py.marshal import LeanInductiveValue, Marshaller, TypeWrapper
 from lean_py.registry import FuncInfo, LibraryRegistry, TypeInfo
-from lean_py.utils import lean_lib_dir
+from lean_py.utils import lean_lib_dir, run_command, shared_lib_extension
 
 
 def _ensure_rpath(dylib: Path) -> None:
@@ -194,6 +194,9 @@ def _build_callable(
         and issubclass(rwrap.ctype, ctypes._Pointer)
     )
 
+    from lean_py.lean_ffi import get_lean_ffi
+    _ffi = get_lean_ffi()
+
     def _wrapper(*args):
         if len(args) != len(pwraps):
             raise TypeError(
@@ -205,6 +208,11 @@ def _build_callable(
             if isinstance(w.ctype, type) and issubclass(w.ctype, ctypes._Pointer):
                 # Convert pointer args to raw pointer values to match cfn.argtypes.
                 v = ctypes.cast(v, c_void_p).value if v is not None else 0
+            elif w.ctype in (c_uint8, ctypes.c_uint16) and not isinstance(v, int):
+                # Enum/Bool: `to_lean` produces a boxed scalar pointer so it
+                # round-trips through nested struct fields, but a top-level
+                # uint8/uint16 parameter expects the raw tag. Unbox here.
+                v = _ffi.lean_unbox(v)
             cargs.append(v)
         if is_io:
             cargs.append(c_void_p(1))
@@ -231,6 +239,61 @@ def _build_callable(
 class LeanLibrary:
     """A loaded Lean library with `@[python]` bindings."""
 
+    @classmethod
+    def from_lake(
+        cls,
+        lake_dir: str | os.PathLike,
+        library_name: str | None = None,
+        *,
+        build: bool = False,
+    ) -> "LeanLibrary":
+        """Load a Lean library from a Lake project directory.
+
+        Looks for `<lake_dir>/.lake/build/lib/lib<library_name>.<ext>`
+        (or, when `library_name` is omitted, the single shared library
+        produced by the project). Pass `build=True` to run `lake build`
+        in `lake_dir` first.
+        """
+        lake_path = Path(lake_dir).resolve()
+        if not lake_path.is_dir():
+            raise FileNotFoundError(f"not a Lake project directory: {lake_path}")
+        if build:
+            run_command(["lake", "build"], cwd=lake_path)
+
+        ext = shared_lib_extension()
+        lib_dir = lake_path / ".lake" / "build" / "lib"
+        if not lib_dir.is_dir():
+            raise FileNotFoundError(
+                f"{lib_dir} does not exist; run `lake build` in {lake_path} "
+                f"or pass build=True"
+            )
+
+        if library_name is not None:
+            candidate = lib_dir / f"lib{library_name}{ext}"
+            if not candidate.exists():
+                raise FileNotFoundError(
+                    f"{candidate} not found; check the library name or "
+                    f"run `lake build`"
+                )
+            return cls(candidate, library_name)
+
+        # Auto-detect: pick the unique shared lib (excluding .hash/.trace).
+        shared = [
+            p for p in lib_dir.glob(f"lib*{ext}")
+            if p.suffix == ext and not p.name.endswith((".hash", ".trace"))
+        ]
+        if not shared:
+            raise FileNotFoundError(
+                f"no shared library found under {lib_dir}; run `lake build`"
+            )
+        if len(shared) > 1:
+            names = ", ".join(p.stem.removeprefix("lib") for p in shared)
+            raise RuntimeError(
+                f"multiple shared libraries under {lib_dir} ({names}); pass "
+                f"library_name to disambiguate"
+            )
+        return cls(shared[0], shared[0].stem.removeprefix("lib"))
+
     def __init__(self, dylib_path: str | os.PathLike, library_name: str):
         self.path = Path(dylib_path)
         self.name = library_name
@@ -247,6 +310,7 @@ class LeanLibrary:
         # FFI helper-lookup chain (used by ref-count and allocation ops).
         self.ffi.register_handle(self.lib)
 
+        self._ensure_task_manager()
         self._initialize_lean_module()
 
         self.registry = self._load_registry()
@@ -274,6 +338,27 @@ class LeanLibrary:
                 setattr(self, fi.exportName, wrap)
 
     # -- internal ---------------------------------------------------------
+
+    _task_manager_initialized: bool = False
+
+    def _ensure_task_manager(self) -> None:
+        """Initialise Lean's task manager once per process.
+
+        `Lean.importModules` (and any kernel operation that allocates a
+        `Task`) asserts on `g_task_manager` being non-null. The Lean
+        executable runtime does this for you in `lean_main`; when we host
+        Lean inside Python we need to call it ourselves. Idempotent.
+        """
+        if LeanLibrary._task_manager_initialized:
+            return
+        try:
+            init = self.lib.lean_init_task_manager
+        except AttributeError:
+            return
+        init.argtypes = []
+        init.restype = None
+        init()
+        LeanLibrary._task_manager_initialized = True
 
     def _initialize_lean_module(self) -> None:
         init_name = f"initialize_{self.name}"

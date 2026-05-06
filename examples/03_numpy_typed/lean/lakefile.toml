@@ -1,0 +1,19 @@
+name = "TypedNumpy"
+version = "0.1.0"
+defaultTargets = ["demo"]
+
+[[require]]
+name = "LeanPy"
+path = "../../.."
+
+[[lean_lib]]
+name = "TypedNumpy"
+precompileModules = true
+
+[[lean_exe]]
+name = "demo"
+root = "Main"
+moreLinkObjs = ["LeanPy/LeanPy:static", "LeanPy/leanPyNative:static"]
+moreLinkArgs = [
+  "-Wl,-headerpad_max_install_names",
+]

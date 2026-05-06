@@ -14,15 +14,61 @@ Effortless interop between **Lean 4** and **Python**, in both directions.
   `loadEnv`, `inferType`, `prettyPrint`, `whnf`, etc. so a host Python
   process can drive Lean's elaborator without spawning a subprocess.
 
+## Install
+
+### Python side (`uv`)
+
+```bash
+uv pip install "git+https://github.com/kiranandcode/lean.py"
+```
+
+or, in a `pyproject.toml`:
+
+```toml
+[project]
+dependencies = ["lean_py @ git+https://github.com/kiranandcode/lean.py"]
+```
+
+The Python package locates `lean.h` and `libleanshared.<ext>` from the
+active Lean toolchain at import time; it does not bundle Lean itself.
+You'll need a working `elan` / `lake` / `lean` installation on PATH.
+
+### Lean side (`lake`)
+
+Add to your `lakefile.toml`:
+
+```toml
+[[require]]
+name = "LeanPy"
+git = "https://github.com/kiranandcode/lean.py"
+
+[[lean_lib]]
+name = "MyLib"
+moreLinkObjs = ["LeanPy/LeanPy:static", "LeanPy/leanPyNative:static"]
+precompileModules = true
+defaultFacets = ["shared"]
+moreLinkArgs = [
+  "-Wl,-headerpad_max_install_names",
+]
+```
+
+The `moreLinkObjs` line bundles the LeanPy static archive and the C
+bridge into your dylib, which is what Python loads. The `headerpad`
+flag is needed on macOS so that `install_name_tool` can rewrite
+`@rpath/...` references at load time (see `docs/ARCHITECTURE.md` for
+details).
+
+A complete minimal project lives at [`examples/01_basic`](./examples/01_basic).
+
 ## Quick example
 
 ```lean
--- examples/lean/PyleanExample.lean
+-- examples/01_basic/lean/Basic.lean
 import LeanPy
 open LeanPy
 
-@[python "py_bar"]
-def bar (x : Int) : Int := x + 1
+@[python "py_increment"]
+def increment (x : Int) : Int := x + 1
 
 structure Point where
   x : Int
@@ -33,18 +79,26 @@ derive_python Point
 @[python "py_origin"]
 def origin (_ : Unit) : Point := ⟨0, 0⟩
 
-#export_python_registry "PyleanExample"
+#export_python_registry "Basic"
 ```
 
 ```python
 # Python side
 from lean_py import LeanLibrary
 
-lib = LeanLibrary("examples/lean/.lake/build/lib/libPyleanExample.dylib",
-                  "PyleanExample")
-print(lib.bar(7))                       # → 8
-print(lib.Point(3, 4))                  # → Point.mk(3, 4)
-print(lib.origin(None))                 # → Point.mk(0, 0)
+# Path to the Lake project; finds .lake/build/lib/lib<Name>.<ext>.
+# Pass build=True to also run `lake build` first.
+lib = LeanLibrary.from_lake("examples/01_basic/lean", "Basic", build=True)
+print(lib.increment(7))    # → 8
+print(lib.Point(3, 4))     # → Point.mk(3, 4)
+print(lib.origin(None))    # → Point.mk(0, 0)
+```
+
+If you've already built the dylib and have the path, the lower-level
+constructor still works:
+
+```python
+lib = LeanLibrary("examples/01_basic/lean/.lake/build/lib/libBasic.dylib", "Basic")
 ```
 
 ## Python in Lean (sympy / numpy demo)
@@ -82,12 +136,26 @@ print(lib.sympySimplify("(x**2 - 1)/(x - 1)"))   # "x + 1"
    Python-in-Lean direction: a `lean_external_class` over `PyObject*`
    plus `lean_py_*` externs that the Lean side calls.
 
+## Examples
+
+```
+examples/
+  01_basic/             tiny end-to-end demo
+  02_pantograph_kernel/ Pantograph-style Lean kernel facade
+  03_numpy_typed/       numpy with Lean-checked dependent shapes
+  04_sympy_tactic/      a real Lean tactic backed by SymPy
+  05_knuckledragger/    Knuckledragger / Z3 as a Lean tactic
+```
+
+Each example is a self-contained Lake + `uv` project — see its
+`README.md` for run instructions.
+
 ## Tests
 
 ```bash
 uv sync --dev
 lake build
-(cd examples/lean && lake build)
+(cd tests/lean && lake build)
 uv run pytest tests -v
 ```
 
@@ -128,6 +196,6 @@ lean_py/
   library.py             # LeanLibrary loader + wrapper generation
   utils.py               # toolchain / lib path helpers
 
-examples/lean/           # PyleanExample: tiny demo Lean library
+examples/                # self-contained demos (see ./examples/README.md)
 tests/                   # 37-test suite (FFI / marshal / kernel / Python-in-Lean / sympy / numpy / memory)
 ```

@@ -65,18 +65,37 @@ class HeaderModel:
 # ============================================================================
 
 def find_lean_header() -> Path:
-    """Locate lean.h using lean-toolchain file."""
+    """Locate lean.h via the active Lean toolchain.
+
+    Strategy:
+      1. Ask `lean --print-prefix` for the toolchain sysroot, look for
+         `<prefix>/include/lean/lean.h`. This is the canonical location
+         and works regardless of whether elan, lakefile, or a manual
+         install picked the toolchain.
+      2. Fall back to constructing the elan path from the project's
+         `lean-toolchain` file, for callers who don't have `lean` on PATH.
+    """
+    try:
+        prefix = subprocess.check_output(
+            ["lean", "--print-prefix"], text=True
+        ).strip()
+        header = Path(prefix) / "include" / "lean" / "lean.h"
+        if header.exists():
+            return header
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
     toolchain_file = Path(__file__).parent.parent / "lean-toolchain"
-    if not toolchain_file.exists():
-        raise FileNotFoundError("lean-toolchain not found at project root")
+    if toolchain_file.exists():
+        toolchain = toolchain_file.read_text().strip()
+        toolchain_dir = toolchain.replace("/", "--").replace(":", "---")
+        header = Path.home() / ".elan" / "toolchains" / toolchain_dir / "include" / "lean" / "lean.h"
+        if header.exists():
+            return header
 
-    toolchain = toolchain_file.read_text().strip()
-    toolchain_dir = toolchain.replace("/", "--").replace(":", "---")
-    header = Path.home() / ".elan" / "toolchains" / toolchain_dir / "include" / "lean" / "lean.h"
-
-    if not header.exists():
-        raise FileNotFoundError(f"lean.h not found at {header}")
-    return header
+    raise FileNotFoundError(
+        "lean.h not found: ensure `lean` is on PATH (try `elan default <toolchain>`)"
+    )
 
 
 # ============================================================================

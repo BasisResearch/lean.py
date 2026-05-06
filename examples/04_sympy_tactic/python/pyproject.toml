@@ -1,0 +1,9 @@
+[project]
+name = "lean-py-sympy-tactic-example"
+version = "0.1.0"
+description = "SymPy as a Lean tactic via lean-py"
+requires-python = ">=3.12"
+dependencies = ["lean_py", "sympy"]
+
+[tool.uv.sources]
+lean_py = { path = "../../..", editable = true }

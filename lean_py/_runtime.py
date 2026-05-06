@@ -512,18 +512,22 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         return self.lean_unbox(o)
 
     def lean_box_float(self, v):
-        fn = getattr(self.lib, "lean_box_float", None)
-        if fn is None:
-            raise RuntimeError("lean_box_float symbol not found")
-        fn.argtypes = [c_double]; fn.restype = LeanObjectPtr
-        return fn(v)
+        # `lean_box_float` is `static inline` in lean.h, so it's not a
+        # linkable symbol — inline it: alloc a ctor with one double of
+        # scalar payload and store the value at offset 0 of the
+        # post-m_objs region.
+        ctor = self.lean_alloc_ctor(0, 0, ctypes.sizeof(c_double))
+        ctor_cls = structs.get("lean_ctor_object")
+        c = ctypes.cast(ctor, POINTER(ctor_cls))
+        addr = ctypes.addressof(c.contents) + ctor_cls.m_objs.offset
+        ctypes.cast(addr, POINTER(c_double))[0] = v
+        return ctor
 
     def lean_unbox_float(self, o):
-        fn = getattr(self.lib, "lean_unbox_float", None)
-        if fn is None:
-            raise RuntimeError("lean_unbox_float symbol not found")
-        fn.argtypes = [LeanObjectPtr]; fn.restype = c_double
-        return fn(o)
+        ctor_cls = structs.get("lean_ctor_object")
+        c = ctypes.cast(o, POINTER(ctor_cls))
+        addr = ctypes.addressof(c.contents) + ctor_cls.m_objs.offset
+        return ctypes.cast(addr, POINTER(c_double))[0]
 
     def lean_unsigned_to_nat(self, n):
         fn = getattr(self.lib, "lean_unsigned_to_nat", None)

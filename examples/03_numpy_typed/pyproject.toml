@@ -1,0 +1,7 @@
+# `uv sync` here installs numpy in `.venv/`. The Lean executable
+# discovers libpython and numpy through that venv via the `run` helper.
+[project]
+name = "lean-py-numpy-typed-example"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["numpy"]

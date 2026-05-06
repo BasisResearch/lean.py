@@ -1,0 +1,78 @@
+/-
+Tiny shape calculus for the typed-numpy demo.
+
+The Python wrapper holds numpy arrays whose `.dtype` matches `Shape.dtype`
+and whose `.shape` matches `Shape.dims`. Reshape, matmul, transpose and
+broadcast are checked here in Lean before being executed in numpy.
+
+The dtype is encoded as a `String` ("f32", "f64", "i32", "i64", "bool")
+rather than a Lean inductive enum: Lean compiles a struct with mixed
+; thobject + scalar fields to a layout the lean-py marshaller does not yet
+fully model (objects in `m_objs`, scalars in a tail region), so the
+all-object-fields encoding is the path that round-trips today.
+-/
+import LeanPy
+
+open LeanPy
+
+structure Shape where
+  dtype : String
+  dims  : Array Nat
+  deriving Repr
+
+derive_python Shape
+
+@[python "shape_rank"]
+def rank (s : Shape) : Int := s.dims.size
+
+@[python "shape_size"]
+def size (s : Shape) : Int :=
+  Int.ofNat (s.dims.foldl (· * ·) 1)
+
+@[python "shape_reshape"]
+def reshape (s : Shape) (newDims : Array Nat) : Shape :=
+  let oldTotal := s.dims.foldl (· * ·) 1
+  let newTotal := newDims.foldl (· * ·) 1
+  if oldTotal == newTotal then { s with dims := newDims } else { s with dims := #[] }
+
+@[python "shape_matmul"]
+def matmul (a : Shape) (b : Shape) : Shape :=
+  if h : a.dims.size = 2 ∧ b.dims.size = 2 then
+    let ⟨ha, hb⟩ := h
+    let m := a.dims[0]'(by omega)
+    let k1 := a.dims[1]'(by omega)
+    let k2 := b.dims[0]'(by omega)
+    let n := b.dims[1]'(by omega)
+    if k1 == k2 ∧ a.dtype == b.dtype then
+      { dtype := a.dtype, dims := #[m, n] }
+    else
+      { dtype := a.dtype, dims := #[] }
+  else
+    { dtype := a.dtype, dims := #[] }
+
+@[python "shape_transpose"]
+def transpose (s : Shape) : Shape :=
+  if h : s.dims.size = 2 then
+    let r := s.dims[0]'(by omega)
+    let c := s.dims[1]'(by omega)
+    { s with dims := #[c, r] }
+  else
+    { s with dims := #[] }
+
+@[python "shape_broadcast"]
+def broadcast (a : Shape) (b : Shape) : Shape := Id.run do
+  if a.dtype != b.dtype then return { dtype := a.dtype, dims := #[] }
+  let na := a.dims.size
+  let nb := b.dims.size
+  let n := Nat.max na nb
+  let mut out : Array Nat := Array.mkEmpty n
+  for i in [:n] do
+    let ai := if i < n - na then 1 else a.dims[i - (n - na)]!
+    let bi := if i < n - nb then 1 else b.dims[i - (n - nb)]!
+    if ai == bi || ai == 1 || bi == 1 then
+      out := out.push (Nat.max ai bi)
+    else
+      return { dtype := a.dtype, dims := #[] }
+  return { dtype := a.dtype, dims := out }
+
+#export_python_registry "Shape"

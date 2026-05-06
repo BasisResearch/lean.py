@@ -1,6 +1,9 @@
-from lean_py.library import LeanLibrary
-from tests.utils import find_examples_dylib
+from pathlib import Path
+
+from lean_py import LeanLibrary
+from lean_py.utils import add_lean_lib_to_dyld_path
+
 
 def test_library():
-    dylib = find_examples_dylib()
-    lib = LeanLibrary(dylib, "PyleanExample")
+    add_lean_lib_to_dyld_path()
+    LeanLibrary.from_lake(Path(__file__).parent / "lean", "TestLib", build=True)

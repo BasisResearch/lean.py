@@ -1,0 +1,9 @@
+[project]
+name = "lean-py-pantograph-example"
+version = "0.1.0"
+description = "Pantograph-style kernel access from Python via lean-py"
+requires-python = ">=3.12"
+dependencies = ["lean_py"]
+
+[tool.uv.sources]
+lean_py = { path = "../../..", editable = true }

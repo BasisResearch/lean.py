@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Build and run the typed-numpy Lean executable, picking up libpython
+# and numpy from the local uv venv.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+(cd lean && lake build)
+
+# `uv run` activates the venv (so numpy is on sys.path); PYTHONHOME
+# stays unset on purpose — letting libpython use the venv's prefix.
+export LEANPY_LIBPYTHON=$(uv run -- python -c '
+import os, sysconfig
+libdir = sysconfig.get_config_var("LIBDIR")
+soname = sysconfig.get_config_var("INSTSONAME") or sysconfig.get_config_var("LDLIBRARY")
+print(os.path.join(libdir, soname) if soname else "")
+')
+
+exec uv run -- ./lean/.lake/build/bin/demo "$@"

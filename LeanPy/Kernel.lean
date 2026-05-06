@@ -23,12 +23,12 @@ initialize envRef : IO.Ref (Option Environment) ← IO.mkRef none
 
 /-- Initialize Lean's search path to allow loading Mathlib / user libs.
 Must be called once per process before `loadEnv`. -/
-@[python "lean_kernel_init_search"]
+@[python "leanpy_kernel_init_search"]
 def initSearch (sp : String) : IO Unit := do
   Lean.initSearchPath (← Lean.findSysroot) (sp := System.SearchPath.parse sp)
 
 /-- Load (import) a list of modules into a fresh environment. -/
-@[python "lean_kernel_load_env"]
+@[python "leanpy_kernel_load_env"]
 unsafe def loadEnv (modules : Array String) : IO Unit := do
   Lean.enableInitializersExecution
   let imports : Array Import := modules.map (fun n => { module := n.toName })
@@ -36,12 +36,12 @@ unsafe def loadEnv (modules : Array String) : IO Unit := do
   envRef.set (some env)
 
 /-- Whether an environment is currently loaded. -/
-@[python "lean_kernel_is_loaded"]
+@[python "leanpy_kernel_is_loaded"]
 def isLoaded (_ : Unit) : IO Bool := do
   return (← envRef.get).isSome
 
 /-- Clear the active environment (frees memory). -/
-@[python "lean_kernel_clear_env"]
+@[python "leanpy_kernel_clear_env"]
 def clearEnv (_ : Unit) : IO Unit :=
   envRef.set none
 
@@ -68,7 +68,7 @@ private def runCore (act : CoreM String) : IO String := do
 /-! ### Declaration introspection -/
 
 /-- Number of declarations in the active environment. -/
-@[python "lean_kernel_decl_count"]
+@[python "leanpy_kernel_decl_count"]
 def declCount (_ : Unit) : IO Int := do
   match (← envRef.get) with
   | some env =>
@@ -79,7 +79,7 @@ def declCount (_ : Unit) : IO Int := do
   | none => return 0
 
 /-- All known declaration names (sorted), as a single newline-separated string. -/
-@[python "lean_kernel_all_decls"]
+@[python "leanpy_kernel_all_decls"]
 def allDecls (_ : Unit) : IO String := do
   match (← envRef.get) with
   | some env =>
@@ -90,7 +90,7 @@ def allDecls (_ : Unit) : IO String := do
   | none => return ""
 
 /-- Look up a declaration's type as a string. Returns "" if not found. -/
-@[python "lean_kernel_decl_type"]
+@[python "leanpy_kernel_decl_type"]
 def declType (name : String) : IO String := runCore do
   let n := name.toName
   match (← getEnv).find? n with
@@ -101,7 +101,7 @@ def declType (name : String) : IO String := runCore do
     return pp.pretty
 
 /-- True iff the given name is defined in the environment. -/
-@[python "lean_kernel_decl_exists"]
+@[python "leanpy_kernel_decl_exists"]
 def declExists (name : String) : IO Bool := do
   match (← envRef.get) with
   | some env => return (env.find? name.toName).isSome
@@ -122,7 +122,7 @@ private def tryRunTerm (src : String) (k : Expr → MetaM String) : CoreM String
       return s!"<elab error: {← e.toMessageData.toString}>"
 
 /-- Parse + elaborate a term, then pretty-print its inferred type. -/
-@[python "lean_kernel_infer_type"]
+@[python "leanpy_kernel_infer_type"]
 def inferType (src : String) : IO String := runCore do
   tryRunTerm src fun expr => do
     let ty ← Meta.inferType expr
@@ -130,7 +130,7 @@ def inferType (src : String) : IO String := runCore do
     return pp.pretty
 
 /-- Parse + elaborate a term, then pretty-print the term itself. -/
-@[python "lean_kernel_pretty_print"]
+@[python "leanpy_kernel_pretty_print"]
 def prettyPrint (src : String) : IO String := runCore do
   tryRunTerm src fun expr => do
     let pp ← Meta.ppExpr expr
@@ -139,7 +139,7 @@ def prettyPrint (src : String) : IO String := runCore do
 /-! ### Reductions -/
 
 /-- Whnf-normalise an expression and pretty-print the result. -/
-@[python "lean_kernel_whnf"]
+@[python "leanpy_kernel_whnf"]
 def whnf (src : String) : IO String := runCore do
   tryRunTerm src fun expr => do
     let r ← Meta.whnf expr

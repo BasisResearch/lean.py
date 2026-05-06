@@ -492,17 +492,28 @@ class Marshaller:
             # ctors). Mirror that ABI on the Python side.
             is_enum = all(len(c.fields) == 0 for c in ti.ctors)
             if is_enum and len(ti.ctors) <= 256:
+                # The Lean compiler unboxes payload-free inductives. At the
+                # top-level C ABI a value-typed `MyEnum` parameter/return is
+                # `uint8_t`; when nested as a `lean_object*` field of an
+                # outer ctor it is a boxed scalar `(tag << 1) | 1`. The
+                # wrapper produces both forms and the call-site picks the
+                # right one based on `ctype`.
                 def from_lean(tag):
-                    tag = int(tag)
-                    ctor = next((c for c in ti.ctors if c.tag == tag), None)
+                    if isinstance(tag, int):
+                        n = tag
+                    elif ffi.lean_is_scalar(tag):
+                        n = ffi.lean_unbox(tag)
+                    else:
+                        n = ffi.lean_ptr_tag(tag)
+                    ctor = next((c for c in ti.ctors if c.tag == n), None)
                     if ctor is None:
-                        raise RuntimeError(f"unknown {ti.name} tag {tag}")
-                    return LeanInductiveValue(ti.name, ctor.name, tag, ())
+                        raise RuntimeError(f"unknown {ti.name} tag {n}")
+                    return LeanInductiveValue(ti.name, ctor.name, n, ())
                 def to_lean(v):
                     if isinstance(v, LeanInductiveValue):
-                        return v.tag
+                        return ffi.lean_box(v.tag)
                     if isinstance(v, int):
-                        return v
+                        return ffi.lean_box(v)
                     raise TypeError(f"cannot encode {v!r} as enum {ti.name}")
                 return TypeWrapper(t, from_lean, to_lean, c_uint8)
             def from_lean(p):

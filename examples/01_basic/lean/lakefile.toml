@@ -1,0 +1,16 @@
+name = "Basic"
+version = "0.1.0"
+defaultTargets = ["Basic"]
+
+[[require]]
+name = "LeanPy"
+path = "../../.."
+
+[[lean_lib]]
+name = "Basic"
+moreLinkObjs = ["LeanPy/LeanPy:static", "LeanPy/leanPyNative:static"]
+precompileModules = true
+defaultFacets = ["shared"]
+moreLinkArgs = [
+  "-Wl,-headerpad_max_install_names",
+]
