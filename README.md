@@ -242,8 +242,8 @@ examples/
   01_basic/             tiny end-to-end demo
   02_pantograph_kernel/ Pantograph-style kernel facade
   03_numpy_typed/       numpy with Lean-checked dependent shapes
-  04_sympy_tactic/      a real Lean tactic backed by SymPy (Expr-based)
-  05_knuckledragger/    Knuckledragger / Z3 as a Lean tactic
+  04_sympy_tactic/      `by sympy` — Lean tactic backed by SymPy via Expr trees
+  05_knuckledragger/    `by knuckle` — Lean tactic backed by Z3 via Expr trees
 ```
 
 Each is a self-contained Lake + uv project.

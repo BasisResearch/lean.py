@@ -1,28 +1,29 @@
 # 05 — Knuckledragger / Z3 as a tactic
 
-Same shape as `04_sympy_tactic`, but the back-end is Z3. The Lean
-tactic `knuckle` hands the goal to Knuckledragger (or plain `z3` if
-Knuckledragger isn't installed) and closes the goal via an oracle
-axiom on accept.
+Same shape as `04_sympy_tactic`, but the back-end is Z3. The Lean tactic
+`knuckle` sends the goal's `Lean.Expr` tree to Python via `Py.ofLeanObj`,
+where `lean_to_z3.py` walks the ADT and converts it to a Z3 expression.
+If Z3 (or Knuckledragger) discharges the proposition, the goal is closed
+via an oracle axiom.
 
 ```lean
 import KnuckleTactic
 
-example : ∀ x : Int, (x + 1)*(x - 1) = x*x - 1 := by knuckle
+example : (1 : Int) + 1 = 2 := by knuckle
+example : (3 : Int) * 4 = 12 := by knuckle
 ```
 
 ## Layout
 
-- `lean/KnuckleTactic.lean` — `knuckle` tactic and `@[python]` helpers
-- `python/knuckle_bridge.py` — the module Lean imports; parses goals
-  and dispatches to `kdr.lemma` / `z3.Solver`
-- `python/main.py` — runs the helpers on a small fixture set
+- `lean/KnuckleTactic.lean` — the `knuckle` tactic and `@[python]` helpers
+- `lean/Demo.lean` — example proofs
+- `python/lean_to_z3.py` — Lean.Expr → Z3 converter (the Python backend
+  that the tactic calls)
 
-## Run
+## Build
 
 ```bash
-cd lean && lake build && cd ..
-uv run --project python python/main.py
+cd lean && lake build
 ```
 
 If you want the real Knuckledragger experience:
@@ -31,9 +32,6 @@ If you want the real Knuckledragger experience:
 uv add --project python kdrag
 ```
 
-The bridge will then call `kdr.lemma(...)` instead of using Z3
-directly, which gives you Knuckledragger's proof-recording machinery
-on top of the SMT call.
-
-The same notes about running the in-Lean tactic from the Lean CLI as
-in `04_sympy_tactic/README.md` apply here.
+The bridge will then call `kdr.lemma(...)` instead of using Z3 directly,
+which gives you Knuckledragger's proof-recording machinery on top of the
+SMT call.

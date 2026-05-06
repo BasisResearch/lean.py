@@ -1,17 +1,23 @@
 """
-Convert Lean.Expr ADT trees (as ``LeanInductiveValue``) to SymPy expressions.
+Convert Lean.Expr ADT trees (as ``LeanInductiveValue``) to Z3 expressions.
 
 The Lean tactic wraps its goal ``Expr`` via ``Py.ofLeanObj`` (which decodes
 registered ``derive_python`` types into ``LeanInductiveValue`` trees), then
-calls ``decode_and_check_prop`` which converts to SymPy and checks the result.
+calls ``decode_and_check_prop`` which converts to Z3 and checks the result.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import sympy
-from sympy import Integer, Symbol, Eq, simplify
+import z3
+
+try:
+    import kdrag as kdr
+    HAS_KDR = True
+except ImportError:
+    kdr = None
+    HAS_KDR = False
 
 if TYPE_CHECKING:
     from lean_py.marshal import LeanInductiveValue
@@ -29,10 +35,10 @@ def name_to_str(name: LeanInductiveValue) -> str:
         if cur.ctor == "anonymous":
             break
         elif cur.ctor == "str":
-            parts.append(cur.fields[1])   # (parent, string)
+            parts.append(cur.fields[1])
             cur = cur.fields[0]
         elif cur.ctor == "num":
-            parts.append(str(cur.fields[1]))  # (parent, nat)
+            parts.append(str(cur.fields[1]))
             cur = cur.fields[0]
         else:
             parts.append(f"<{cur.ctor}>")
@@ -57,26 +63,31 @@ def uncurry_app(expr: LeanInductiveValue) -> tuple[LeanInductiveValue, list[Lean
 
 
 # ---------------------------------------------------------------------------
+#  Z3 variable management
+# ---------------------------------------------------------------------------
+
+_VAR_CACHE: dict[str, z3.ArithRef] = {}
+
+
+def _var(name: str) -> z3.ArithRef:
+    if name not in _VAR_CACHE:
+        _VAR_CACHE[name] = z3.Int(name)
+    return _VAR_CACHE[name]
+
+
+# ---------------------------------------------------------------------------
 #  Main converter
 # ---------------------------------------------------------------------------
 
-# Dispatch table: head constant name -> (number of meaningful trailing args, builder)
-# For elaborated Lean expressions, the first few args are type/instance params;
-# we only look at the *last N* arguments.
-
 def _binop(op):
-    """Return a builder for a binary operation (last 2 args)."""
     def build(args):
-        a = expr_to_sympy(args[-2])
-        b = expr_to_sympy(args[-1])
-        return op(a, b)
+        return op(expr_to_z3(args[-2]), expr_to_z3(args[-1]))
     return 2, build
 
 
 def _unop(op):
-    """Return a builder for a unary operation (last 1 arg)."""
     def build(args):
-        return op(expr_to_sympy(args[-1]))
+        return op(expr_to_z3(args[-1]))
     return 1, build
 
 
@@ -86,54 +97,63 @@ _DISPATCH: dict[str, tuple[int, object]] = {
     "HMul.hMul": _binop(lambda a, b: a * b),
     "HDiv.hDiv": _binop(lambda a, b: a / b),
     "HPow.hPow": _binop(lambda a, b: a ** b),
-    "Eq":        (2, lambda args: Eq(expr_to_sympy(args[-2]), expr_to_sympy(args[-1]))),
+    "Eq":        (2, lambda args: expr_to_z3(args[-2]) == expr_to_z3(args[-1])),
     "Neg.neg":   _unop(lambda x: -x),
     "HNeg.hNeg": _unop(lambda x: -x),
-    "Nat.succ":  (1, lambda args: expr_to_sympy(args[-1]) + 1),
-    "Int.ofNat": (1, lambda args: expr_to_sympy(args[-1])),
-    "Int.negSucc": (1, lambda args: -(expr_to_sympy(args[-1]) + 1)),
+    "Nat.succ":  (1, lambda args: expr_to_z3(args[-1]) + 1),
+    "Int.ofNat": (1, lambda args: expr_to_z3(args[-1])),
+    "Int.negSucc": (1, lambda args: -(expr_to_z3(args[-1]) + 1)),
 }
 
 
 def _ofnat_build(args):
     """Handle ``OfNat.ofNat`` — args[1] is the nat literal."""
-    # OfNat.ofNat {α} (n : Nat) [inst : OfNat α n] : α
-    # In the elaborated app chain the meaningful arg is index 1 (the Nat).
     if len(args) >= 2:
-        return expr_to_sympy(args[1])
-    return expr_to_sympy(args[-1])
+        return expr_to_z3(args[1])
+    return expr_to_z3(args[-1])
 
 
-def expr_to_sympy(expr: LeanInductiveValue) -> sympy.Basic:
-    """Convert a ``Lean.Expr`` (as ``LeanInductiveValue``) to a SymPy expression.
+def _forall_build(expr: LeanInductiveValue):
+    """Handle ``Expr.forallE`` — ∀ x : α, body."""
+    # forallE(name, type, body, binderInfo)
+    var_name = name_to_str(expr.fields[0])
+    body = expr.fields[2]
+    # Introduce a fresh Z3 variable and convert the body
+    v = _var(var_name) if var_name else _var(f"_x")
+    body_z3 = expr_to_z3(body)
+    return z3.ForAll([v], body_z3)
 
-    Handles the elaborated forms that Lean's kernel produces (with type and
-    instance parameters baked in).
-    """
+
+def expr_to_z3(expr: LeanInductiveValue):
+    """Convert a ``Lean.Expr`` (as ``LeanInductiveValue``) to a Z3 expression."""
     ctor = expr.ctor
 
     # --- Literal ---
     if ctor == "lit":
-        lit = expr.fields[0]  # Lean.Literal
+        lit = expr.fields[0]
         if lit.ctor == "natVal":
-            return Integer(lit.fields[0])
+            return z3.IntVal(lit.fields[0])
         raise ValueError(f"unsupported Literal: {lit.ctor}")
 
     # --- Bound variable ---
     if ctor == "bvar":
-        return Symbol(f"x{expr.fields[0]}")
+        idx = expr.fields[0]
+        return _var(f"x{idx}")
 
     # --- Free variable ---
     if ctor == "fvar":
-        fvar_id = expr.fields[0]  # FVarId (single-ctor struct wrapping Name)
+        fvar_id = expr.fields[0]
         if hasattr(fvar_id, "fields") and fvar_id.fields:
-            return Symbol(name_to_str(fvar_id.fields[0]))
-        return Symbol(str(fvar_id))
+            return _var(name_to_str(fvar_id.fields[0]))
+        return _var(str(fvar_id))
 
     # --- mdata: unwrap transparently ---
     if ctor == "mdata":
-        # mdata(kvmap, expr)
-        return expr_to_sympy(expr.fields[1])
+        return expr_to_z3(expr.fields[1])
+
+    # --- ForAll ---
+    if ctor == "forallE":
+        return _forall_build(expr)
 
     # --- Application: uncurry and dispatch ---
     if ctor == "app":
@@ -142,7 +162,6 @@ def expr_to_sympy(expr: LeanInductiveValue) -> sympy.Basic:
         if head.ctor == "const":
             head_name = name_to_str(head.fields[0])
 
-            # OfNat.ofNat special case
             if head_name == "OfNat.ofNat":
                 return _ofnat_build(args)
 
@@ -152,35 +171,45 @@ def expr_to_sympy(expr: LeanInductiveValue) -> sympy.Basic:
                 if len(args) >= min_args:
                     return builder(args)
 
-        # Fallback: try to convert as a SymPy Symbol
+        # Fallback: unknown function as a Z3 variable
         if head.ctor == "const":
-            head_name = name_to_str(head.fields[0])
-            return Symbol(head_name)
+            return _var(name_to_str(head.fields[0]))
 
-    # --- Constant (standalone, no args) ---
+    # --- Constant (standalone) ---
     if ctor == "const":
         name = name_to_str(expr.fields[0])
-        # Common constants
         if name in ("Nat.zero", "Int.zero"):
-            return Integer(0)
-        return Symbol(name)
+            return z3.IntVal(0)
+        return _var(name)
 
-    raise ValueError(f"cannot convert Expr.{ctor} to SymPy: {expr!r}")
+    raise ValueError(f"cannot convert Expr.{ctor} to Z3: {expr!r}")
 
 
 # ---------------------------------------------------------------------------
 #  Proposition checkers
 # ---------------------------------------------------------------------------
 
-def sympy_prop_check(prop: sympy.Basic) -> bool:
-    """Check if a SymPy proposition is identically true."""
-    s = simplify(prop)
-    return s is sympy.true or s == True  # noqa: E712
+def z3_proves(prop) -> bool:
+    """Check if Z3 can discharge a proposition."""
+    s = z3.Solver()
+    s.add(z3.Not(prop))
+    return s.check() == z3.unsat
 
 
-def sympy_eq_check(lhs: sympy.Basic, rhs: sympy.Basic) -> bool:
-    """Check if ``simplify(lhs - rhs) == 0``."""
-    return simplify(lhs - rhs) == 0
+def z3_eq_check(lhs, rhs) -> bool:
+    """Check if lhs == rhs via Z3."""
+    return z3_proves(lhs == rhs)
+
+
+def check_prop(prop) -> bool:
+    """Check a proposition via Knuckledragger (if available) or plain Z3."""
+    if HAS_KDR:
+        try:
+            kdr.lemma(prop)
+            return True
+        except Exception:
+            return False
+    return z3_proves(prop)
 
 
 # ---------------------------------------------------------------------------
@@ -188,12 +217,12 @@ def sympy_eq_check(lhs: sympy.Basic, rhs: sympy.Basic) -> bool:
 # ---------------------------------------------------------------------------
 
 def decode_and_check_prop(expr) -> bool:
-    """Convert a ``Lean.Expr`` (as ``LeanInductiveValue``) to SymPy and check
-    if the proposition is identically true.
+    """Convert a ``Lean.Expr`` (as ``LeanInductiveValue``) to Z3 and check
+    if Z3 / Knuckledragger can discharge the proposition.
 
     Called from the Lean tactic: ``Py.ofLeanObj`` decodes the ``Lean.Expr``
     into a ``LeanInductiveValue`` tree (thanks to ``derive_python``), which
     is passed directly to this function.
     """
-    prop = expr_to_sympy(expr)
-    return sympy_prop_check(prop)
+    prop = expr_to_z3(expr)
+    return check_prop(prop)
