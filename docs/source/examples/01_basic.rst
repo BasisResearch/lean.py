@@ -157,6 +157,27 @@ Inductives expose their constructors as attributes:
    >>> lib.perimeter(lib.Shape.rect(2, 3))
    10
 
+Pattern matching works naturally with Python 3.10+ ``match``/``case``:
+
+.. code-block:: python
+
+   Shape = lib.Shape
+
+   def describe(s):
+       match s:
+           case Shape.circle(r):
+               return f"circle with radius {r}"
+           case Shape.square(side):
+               return f"square with side {side}"
+           case Shape.rect(w, h):
+               return f"{w}x{h} rectangle"
+
+   >>> describe(lib.Shape.circle(5))
+   'circle with radius 5'
+
+   >>> describe(lib.Shape.rect(2, 3))
+   '2x3 rectangle'
+
 Running it
 ----------
 
