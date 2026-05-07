@@ -3,9 +3,7 @@ name = "lean-py-knuckledragger-example"
 version = "0.1.0"
 description = "Knuckledragger / Z3 as a Lean tactic via lean-py"
 requires-python = ">=3.12"
-dependencies = ["lean_py", "z3-solver"]
-# Knuckledragger is optional; the demo falls back to plain z3 if absent.
-# To enable it: uv add --project python kdrag
+dependencies = ["lean_py", "z3-solver", "kdrag"]
 
 [tool.uv.sources]
 lean_py = { path = "../../..", editable = true }

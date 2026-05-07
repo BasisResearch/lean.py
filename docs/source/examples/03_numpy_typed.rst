@@ -6,7 +6,7 @@ we call Python from Lean. The result is a numpy wrapper where **array
 shapes are checked at compile time by Lean's type system**. Shape
 mismatches become type errors before any Python code runs.
 
-`View full source on GitHub <https://github.com/kiranandcode/lean.py/tree/main/examples/03_numpy_typed>`_
+`View full source on GitHub <https://github.com/BasisResearch/lean.py/tree/main/examples/03_numpy_typed>`_
 
 The idea
 --------

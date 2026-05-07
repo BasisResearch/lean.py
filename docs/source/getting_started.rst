@@ -18,14 +18,14 @@ Installation
 
 .. code-block:: bash
 
-   uv pip install "lean_py @ git+https://github.com/kiranandcode/lean.py"
+   uv pip install "lean_py @ git+https://github.com/BasisResearch/lean.py"
 
 Or in ``pyproject.toml``:
 
 .. code-block:: toml
 
    [project]
-   dependencies = ["lean_py @ git+https://github.com/kiranandcode/lean.py"]
+   dependencies = ["lean_py @ git+https://github.com/BasisResearch/lean.py"]
 
 The Python package discovers ``lean.h`` and ``libleanshared`` from the active
 Lean toolchain at import time.
@@ -38,7 +38,7 @@ Add to your ``lakefile.toml``:
 
    [[require]]
    name = "LeanPy"
-   git  = "https://github.com/kiranandcode/lean.py"
+   git  = "https://github.com/BasisResearch/lean.py"
 
    [[lean_lib]]
    name = "MyLib"
@@ -105,6 +105,39 @@ Quick Start
 
 ``from_lake`` finds the shared library produced by ``lake build``. Pass
 ``build=True`` to run ``lake build`` automatically.
+
+Pattern Matching (Python 3.10+)
+-------------------------------
+
+Lean inductive values support Python's ``match``/``case`` syntax:
+
+.. code-block:: python
+
+   from lean_py import LeanLibrary
+
+   lib = LeanLibrary.from_lake("path/to/project", "MyLib", build=True)
+   Shape = lib.Shape
+
+   shape = lib.mkCircle(5)
+
+   match shape:
+       case Shape.circle(radius):
+           print(f"circle with radius {radius}")
+       case Shape.rect(w, h):
+           print(f"rectangle {w}x{h}")
+
+You can also use ``isinstance`` checks:
+
+.. code-block:: python
+
+   isinstance(shape, Shape.circle)   # True
+   isinstance(shape, Shape.rect)     # False
+
+And access fields by index:
+
+.. code-block:: python
+
+   shape._0    # 5 (first field = radius)
 
 Calling Python from Lean
 ------------------------

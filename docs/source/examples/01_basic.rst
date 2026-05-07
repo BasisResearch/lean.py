@@ -4,7 +4,7 @@ Basic Example
 This walkthrough builds the smallest possible lean-py project: a handful
 of functions, a structure, and an inductive type, all callable from Python.
 
-`View full source on GitHub <https://github.com/kiranandcode/lean.py/tree/main/examples/01_basic>`_
+`View full source on GitHub <https://github.com/BasisResearch/lean.py/tree/main/examples/01_basic>`_
 
 The Lean side
 -------------

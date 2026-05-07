@@ -8,19 +8,10 @@ calls ``decode_and_check_prop`` which converts to Z3 and checks the result.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+import kdrag as kdr
 import z3
 
-try:
-    import kdrag as kdr
-    HAS_KDR = True
-except ImportError:
-    kdr = None
-    HAS_KDR = False
-
-if TYPE_CHECKING:
-    from lean_py.marshal import LeanInductiveValue
+from lean_py.marshal import LeanInductiveValue
 
 
 # ---------------------------------------------------------------------------
@@ -32,17 +23,18 @@ def name_to_str(name: LeanInductiveValue) -> str:
     parts: list[str] = []
     cur = name
     while True:
-        if cur.ctor == "anonymous":
-            break
-        elif cur.ctor == "str":
-            parts.append(cur.fields[1])
-            cur = cur.fields[0]
-        elif cur.ctor == "num":
-            parts.append(str(cur.fields[1]))
-            cur = cur.fields[0]
-        else:
-            parts.append(f"<{cur.ctor}>")
-            break
+        match cur:
+            case LeanInductiveValue(ctor="anonymous"):
+                break
+            case LeanInductiveValue(ctor="str", fields=(parent, leaf)):
+                parts.append(leaf)
+                cur = parent
+            case LeanInductiveValue(ctor="num", fields=(parent, n)):
+                parts.append(str(n))
+                cur = parent
+            case _:
+                parts.append(f"<{cur.ctor}>")
+                break
     parts.reverse()
     return ".".join(parts) if parts else ""
 
@@ -56,8 +48,8 @@ def uncurry_app(expr: LeanInductiveValue) -> tuple[LeanInductiveValue, list[Lean
     args: list[LeanInductiveValue] = []
     cur = expr
     while cur.ctor == "app":
-        args.append(cur.fields[1])
-        cur = cur.fields[0]
+        args.append(cur._1)   # arg
+        cur = cur._0          # fn
     args.reverse()
     return cur, args
 
@@ -113,103 +105,77 @@ def _ofnat_build(args):
     return expr_to_z3(args[-1])
 
 
-def _forall_build(expr: LeanInductiveValue):
-    """Handle ``Expr.forallE`` — ∀ x : α, body."""
-    # forallE(name, type, body, binderInfo)
-    var_name = name_to_str(expr.fields[0])
-    body = expr.fields[2]
-    # Introduce a fresh Z3 variable and convert the body
-    v = _var(var_name) if var_name else _var(f"_x")
-    body_z3 = expr_to_z3(body)
-    return z3.ForAll([v], body_z3)
-
-
 def expr_to_z3(expr: LeanInductiveValue):
     """Convert a ``Lean.Expr`` (as ``LeanInductiveValue``) to a Z3 expression."""
-    ctor = expr.ctor
+    match expr:
+        # --- Literal ---
+        case LeanInductiveValue(ctor="lit", fields=(lit,)):
+            match lit:
+                case LeanInductiveValue(ctor="natVal", fields=(n,)):
+                    return z3.IntVal(n)
+                case _:
+                    raise ValueError(f"unsupported Literal: {lit.ctor}")
 
-    # --- Literal ---
-    if ctor == "lit":
-        lit = expr.fields[0]
-        if lit.ctor == "natVal":
-            return z3.IntVal(lit.fields[0])
-        raise ValueError(f"unsupported Literal: {lit.ctor}")
+        # --- Bound variable ---
+        case LeanInductiveValue(ctor="bvar", fields=(idx,)):
+            return _var(f"x{idx}")
 
-    # --- Bound variable ---
-    if ctor == "bvar":
-        idx = expr.fields[0]
-        return _var(f"x{idx}")
+        # --- Free variable ---
+        case LeanInductiveValue(ctor="fvar", fields=(fvar_id,)):
+            if hasattr(fvar_id, "fields") and fvar_id.fields:
+                return _var(name_to_str(fvar_id._0))
+            return _var(str(fvar_id))
 
-    # --- Free variable ---
-    if ctor == "fvar":
-        fvar_id = expr.fields[0]
-        if hasattr(fvar_id, "fields") and fvar_id.fields:
-            return _var(name_to_str(fvar_id.fields[0]))
-        return _var(str(fvar_id))
+        # --- mdata: unwrap transparently ---
+        case LeanInductiveValue(ctor="mdata", fields=(_, inner)):
+            return expr_to_z3(inner)
 
-    # --- mdata: unwrap transparently ---
-    if ctor == "mdata":
-        return expr_to_z3(expr.fields[1])
+        # --- ForAll: forallE(name, type, body, binderInfo) ---
+        case LeanInductiveValue(ctor="forallE", fields=(name_val, _, body, *_)):
+            var_name = name_to_str(name_val)
+            v = _var(var_name) if var_name else _var("_x")
+            return z3.ForAll([v], expr_to_z3(body))
 
-    # --- ForAll ---
-    if ctor == "forallE":
-        return _forall_build(expr)
+        # --- Application: uncurry and dispatch ---
+        case LeanInductiveValue(ctor="app"):
+            head, args = uncurry_app(expr)
 
-    # --- Application: uncurry and dispatch ---
-    if ctor == "app":
-        head, args = uncurry_app(expr)
+            if head.ctor == "const":
+                head_name = name_to_str(head._0)
 
-        if head.ctor == "const":
-            head_name = name_to_str(head.fields[0])
+                if head_name == "OfNat.ofNat":
+                    return _ofnat_build(args)
 
-            if head_name == "OfNat.ofNat":
-                return _ofnat_build(args)
+                entry = _DISPATCH.get(head_name)
+                if entry is not None:
+                    min_args, builder = entry
+                    if len(args) >= min_args:
+                        return builder(args)
 
-            entry = _DISPATCH.get(head_name)
-            if entry is not None:
-                min_args, builder = entry
-                if len(args) >= min_args:
-                    return builder(args)
+                # Fallback: unknown function as a Z3 variable
+                return _var(head_name)
 
-        # Fallback: unknown function as a Z3 variable
-        if head.ctor == "const":
-            return _var(name_to_str(head.fields[0]))
+        # --- Constant (standalone) ---
+        case LeanInductiveValue(ctor="const", fields=(name_val, _)):
+            name = name_to_str(name_val)
+            if name in ("Nat.zero", "Int.zero"):
+                return z3.IntVal(0)
+            return _var(name)
 
-    # --- Constant (standalone) ---
-    if ctor == "const":
-        name = name_to_str(expr.fields[0])
-        if name in ("Nat.zero", "Int.zero"):
-            return z3.IntVal(0)
-        return _var(name)
-
-    raise ValueError(f"cannot convert Expr.{ctor} to Z3: {expr!r}")
+    raise ValueError(f"cannot convert Expr.{expr.ctor} to Z3: {expr!r}")
 
 
 # ---------------------------------------------------------------------------
 #  Proposition checkers
 # ---------------------------------------------------------------------------
 
-def z3_proves(prop) -> bool:
-    """Check if Z3 can discharge a proposition."""
-    s = z3.Solver()
-    s.add(z3.Not(prop))
-    return s.check() == z3.unsat
-
-
-def z3_eq_check(lhs, rhs) -> bool:
-    """Check if lhs == rhs via Z3."""
-    return z3_proves(lhs == rhs)
-
-
 def check_prop(prop) -> bool:
-    """Check a proposition via Knuckledragger (if available) or plain Z3."""
-    if HAS_KDR:
-        try:
-            kdr.lemma(prop)
-            return True
-        except Exception:
-            return False
-    return z3_proves(prop)
+    """Check a proposition via Knuckledragger (backed by Z3)."""
+    try:
+        kdr.lemma(prop)
+        return True
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +184,7 @@ def check_prop(prop) -> bool:
 
 def decode_and_check_prop(expr) -> bool:
     """Convert a ``Lean.Expr`` (as ``LeanInductiveValue``) to Z3 and check
-    if Z3 / Knuckledragger can discharge the proposition.
+    if Knuckledragger can discharge the proposition.
 
     Called from the Lean tactic: ``Py.ofLeanObj`` decodes the ``Lean.Expr``
     into a ``LeanInductiveValue`` tree (thanks to ``derive_python``), which

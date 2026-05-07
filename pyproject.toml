@@ -24,10 +24,10 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/kiranandcode/lean.py"
-Repository = "https://github.com/kiranandcode/lean.py"
-Issues = "https://github.com/kiranandcode/lean.py/issues"
-Documentation = "https://kiranandcode.github.io/lean.py"
+Homepage = "https://github.com/BasisResearch/lean.py"
+Repository = "https://github.com/BasisResearch/lean.py"
+Issues = "https://github.com/BasisResearch/lean.py/issues"
+Documentation = "https://BasisResearch.github.io/lean.py"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

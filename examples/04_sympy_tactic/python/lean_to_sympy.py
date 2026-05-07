@@ -8,13 +8,10 @@ calls ``decode_and_check_prop`` which converts to SymPy and checks the result.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import sympy
 from sympy import Integer, Symbol, Eq, simplify
 
-if TYPE_CHECKING:
-    from lean_py.marshal import LeanInductiveValue
+from lean_py.marshal import LeanInductiveValue
 
 
 # ---------------------------------------------------------------------------
@@ -26,17 +23,18 @@ def name_to_str(name: LeanInductiveValue) -> str:
     parts: list[str] = []
     cur = name
     while True:
-        if cur.ctor == "anonymous":
-            break
-        elif cur.ctor == "str":
-            parts.append(cur.fields[1])   # (parent, string)
-            cur = cur.fields[0]
-        elif cur.ctor == "num":
-            parts.append(str(cur.fields[1]))  # (parent, nat)
-            cur = cur.fields[0]
-        else:
-            parts.append(f"<{cur.ctor}>")
-            break
+        match cur:
+            case LeanInductiveValue(ctor="anonymous"):
+                break
+            case LeanInductiveValue(ctor="str", fields=(parent, leaf)):
+                parts.append(leaf)
+                cur = parent
+            case LeanInductiveValue(ctor="num", fields=(parent, n)):
+                parts.append(str(n))
+                cur = parent
+            case _:
+                parts.append(f"<{cur.ctor}>")
+                break
     parts.reverse()
     return ".".join(parts) if parts else ""
 
@@ -50,8 +48,8 @@ def uncurry_app(expr: LeanInductiveValue) -> tuple[LeanInductiveValue, list[Lean
     args: list[LeanInductiveValue] = []
     cur = expr
     while cur.ctor == "app":
-        args.append(cur.fields[1])
-        cur = cur.fields[0]
+        args.append(cur._1)   # arg
+        cur = cur._0          # fn
     args.reverse()
     return cur, args
 
@@ -110,62 +108,57 @@ def expr_to_sympy(expr: LeanInductiveValue) -> sympy.Basic:
     Handles the elaborated forms that Lean's kernel produces (with type and
     instance parameters baked in).
     """
-    ctor = expr.ctor
+    match expr:
+        # --- Literal ---
+        case LeanInductiveValue(ctor="lit", fields=(lit,)):
+            match lit:
+                case LeanInductiveValue(ctor="natVal", fields=(n,)):
+                    return Integer(n)
+                case _:
+                    raise ValueError(f"unsupported Literal: {lit.ctor}")
 
-    # --- Literal ---
-    if ctor == "lit":
-        lit = expr.fields[0]  # Lean.Literal
-        if lit.ctor == "natVal":
-            return Integer(lit.fields[0])
-        raise ValueError(f"unsupported Literal: {lit.ctor}")
+        # --- Bound variable ---
+        case LeanInductiveValue(ctor="bvar", fields=(idx,)):
+            return Symbol(f"x{idx}")
 
-    # --- Bound variable ---
-    if ctor == "bvar":
-        return Symbol(f"x{expr.fields[0]}")
+        # --- Free variable ---
+        case LeanInductiveValue(ctor="fvar", fields=(fvar_id,)):
+            if hasattr(fvar_id, "fields") and fvar_id.fields:
+                return Symbol(name_to_str(fvar_id._0))
+            return Symbol(str(fvar_id))
 
-    # --- Free variable ---
-    if ctor == "fvar":
-        fvar_id = expr.fields[0]  # FVarId (single-ctor struct wrapping Name)
-        if hasattr(fvar_id, "fields") and fvar_id.fields:
-            return Symbol(name_to_str(fvar_id.fields[0]))
-        return Symbol(str(fvar_id))
+        # --- mdata: unwrap transparently ---
+        case LeanInductiveValue(ctor="mdata", fields=(_, inner)):
+            return expr_to_sympy(inner)
 
-    # --- mdata: unwrap transparently ---
-    if ctor == "mdata":
-        # mdata(kvmap, expr)
-        return expr_to_sympy(expr.fields[1])
+        # --- Application: uncurry and dispatch ---
+        case LeanInductiveValue(ctor="app"):
+            head, args = uncurry_app(expr)
 
-    # --- Application: uncurry and dispatch ---
-    if ctor == "app":
-        head, args = uncurry_app(expr)
+            if head.ctor == "const":
+                head_name = name_to_str(head._0)
 
-        if head.ctor == "const":
-            head_name = name_to_str(head.fields[0])
+                # OfNat.ofNat special case
+                if head_name == "OfNat.ofNat":
+                    return _ofnat_build(args)
 
-            # OfNat.ofNat special case
-            if head_name == "OfNat.ofNat":
-                return _ofnat_build(args)
+                entry = _DISPATCH.get(head_name)
+                if entry is not None:
+                    min_args, builder = entry
+                    if len(args) >= min_args:
+                        return builder(args)
 
-            entry = _DISPATCH.get(head_name)
-            if entry is not None:
-                min_args, builder = entry
-                if len(args) >= min_args:
-                    return builder(args)
+                # Fallback: unknown function as a SymPy Symbol
+                return Symbol(head_name)
 
-        # Fallback: try to convert as a SymPy Symbol
-        if head.ctor == "const":
-            head_name = name_to_str(head.fields[0])
-            return Symbol(head_name)
+        # --- Constant (standalone, no args) ---
+        case LeanInductiveValue(ctor="const", fields=(name_val, _)):
+            name = name_to_str(name_val)
+            if name in ("Nat.zero", "Int.zero"):
+                return Integer(0)
+            return Symbol(name)
 
-    # --- Constant (standalone, no args) ---
-    if ctor == "const":
-        name = name_to_str(expr.fields[0])
-        # Common constants
-        if name in ("Nat.zero", "Int.zero"):
-            return Integer(0)
-        return Symbol(name)
-
-    raise ValueError(f"cannot convert Expr.{ctor} to SymPy: {expr!r}")
+    raise ValueError(f"cannot convert Expr.{expr.ctor} to SymPy: {expr!r}")
 
 
 # ---------------------------------------------------------------------------

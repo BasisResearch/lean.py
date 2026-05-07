@@ -18,7 +18,7 @@ import LeanPy.Registry
 import LeanPy.Attr
 import Pantograph
 import LeanPy.Kernel.Compat
-import LeanPy.Kernel.Frontend
+import Pantograph.Frontend
 
 open Lean Meta Elab Pantograph
 
@@ -646,7 +646,7 @@ and goals as a draftable goal state. -/
 @[python "leanpy_kernel_frontend_find_source_path"]
 def frontendFindSourcePath (moduleName : String) : IO String := do
   try
-    let p ← Frontend.findSourcePath moduleName.toName
+    let p ← Pantograph.Frontend.findSourcePath moduleName.toName
     return p.toString
   catch e => return s!"<error: {e.toString}>"
 
@@ -658,9 +658,9 @@ def frontendProcess (source : String) : IO String := do
   | none => return "no environment loaded"
   | some env =>
     try
-      let (fctx, fstate) ← Frontend.createContextStateFromFile source "<process>" (env? := some env) {}
-      let m : Frontend.FrontendM (List String) :=
-        Frontend.mapCompilationSteps fun step => do
+      let (fctx, fstate) ← Pantograph.Frontend.createContextStateFromFile source "<process>" (env? := some env) {}
+      let m : Pantograph.Frontend.FrontendM (List String) :=
+        Pantograph.Frontend.mapCompilationSteps fun step => do
           let names ← step.newConstants
           return "\n".intercalate (names.toList.map toString)
       let (steps, _) ← (m.run {} |>.run fctx |>.run fstate)
@@ -675,16 +675,16 @@ def frontendCollectSorrys (source : String) : IO (Option GoalState × String) :=
   | none => return (none, "no environment loaded")
   | some env =>
     try
-      let (fctx, fstate) ← Frontend.createContextStateFromFile source "<collect_sorrys>" (env? := some env) {}
-      let m : Frontend.FrontendM (List Frontend.InfoWithContext) := do
-        let xss ← Frontend.mapCompilationSteps fun step => Frontend.collectSorrys step
+      let (fctx, fstate) ← Pantograph.Frontend.createContextStateFromFile source "<collect_sorrys>" (env? := some env) {}
+      let m : Pantograph.Frontend.FrontendM (List Pantograph.Frontend.InfoWithContext) := do
+        let xss ← Pantograph.Frontend.mapCompilationSteps fun step => Pantograph.Frontend.collectSorrys step
         return xss.flatten
       let (sorrys, _) ← (m.run {} |>.run fctx |>.run fstate)
       if sorrys.isEmpty then
         return (none, "no sorrys")
       let ctx ← freshCoreContext
       let cs : Core.State := { env }
-      let metaM : MetaM Frontend.AnnotatedGoalState := Frontend.sorrysToGoalState sorrys
+      let metaM : MetaM Pantograph.Frontend.AnnotatedGoalState := Pantograph.Frontend.sorrysToGoalState sorrys
       let (annotated, _) ← (metaM.run').toIO ctx cs
       return (some annotated.state, "")
     catch e => return (none, s!"<error: {e.toString}>")

@@ -6,7 +6,7 @@ to Lean's type-checker, elaborator, and tactic engine. No custom Lean
 project is needed -- any library that imports ``LeanPy.Kernel`` already
 has the full API surface.
 
-`View full source on GitHub <https://github.com/kiranandcode/lean.py/tree/main/examples/02_pantograph_kernel>`_
+`View full source on GitHub <https://github.com/BasisResearch/lean.py/tree/main/examples/02_pantograph_kernel>`_
 
 Setting up
 ----------

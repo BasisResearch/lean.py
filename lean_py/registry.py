@@ -15,7 +15,22 @@ from typing import Any
 
 @dataclass(frozen=True)
 class TypeRepr:
-    """Structural description of a Lean type."""
+    """Structural description of a Lean type as it appears in the registry.
+
+    Each ``kind`` value corresponds to a Lean type family:
+
+    - ``"unit"``, ``"bool"``, ``"nat"``, ``"int"``, ``"float"``,
+      ``"char"``, ``"string"`` — primitive scalar types.
+    - ``"uint"`` / ``"sint"`` — fixed-width integers (``bits`` gives width).
+    - ``"array"``, ``"list"``, ``"option"`` — generic containers (``elem``
+      holds the element type).
+    - ``"prod"`` — product/pair (``a``, ``b``).
+    - ``"io"`` — ``IO α`` (``elem`` holds ``α``).
+    - ``"named"`` — a user-defined inductive registered via ``derive_python``
+      (``name`` is the fully-qualified Lean name).
+    - ``"pyobject"`` — the ``LeanPy.Python.Py`` opaque wrapper.
+    - ``"opaque"`` — any type that lean-py cannot introspect.
+    """
     kind: str
     # Optional fields, depending on kind
     bits: int | None = None
@@ -73,6 +88,13 @@ class TypeRepr:
 
 @dataclass(frozen=True)
 class CtorInfo:
+    """Metadata for a single constructor of a Lean inductive type.
+
+    Attributes:
+        name: Unqualified constructor name (e.g. ``"cons"`` for ``List.cons``).
+        tag: Runtime integer tag (index in constructor order, starting at 0).
+        fields: Tuple of :class:`TypeRepr` describing each positional field.
+    """
     name: str
     tag: int
     fields: tuple[TypeRepr, ...]
@@ -88,7 +110,15 @@ class CtorInfo:
 
 @dataclass(frozen=True)
 class TypeInfo:
-    name: str  # fully-qualified Lean name
+    """Registry entry for a Lean inductive type exposed via ``derive_python``.
+
+    Attributes:
+        name: Fully-qualified Lean name (e.g. ``"Lean.Expr"``).
+        isStructure: True if the type is a single-constructor structure.
+        isEnum: True if all constructors are nullary (enum-like).
+        ctors: Constructors in declaration order.
+    """
+    name: str
     isStructure: bool
     isEnum: bool
     ctors: tuple[CtorInfo, ...]
@@ -105,6 +135,14 @@ class TypeInfo:
 
 @dataclass(frozen=True)
 class FuncInfo:
+    """Registry entry for a Lean function annotated with ``@[python]``.
+
+    Attributes:
+        declName: Fully-qualified Lean declaration name.
+        exportName: C symbol name (the ``@[export ...]`` name).
+        params: Positional parameter types in declaration order.
+        returnType: Return type (may be wrapped in ``IO``).
+    """
     declName: str
     exportName: str
     params: tuple[TypeRepr, ...]
@@ -122,7 +160,14 @@ class FuncInfo:
 
 @dataclass
 class LibraryRegistry:
-    """The complete registry returned by a Lean library at load time."""
+    """The complete type and function registry returned by a Lean library at load time.
+
+    Built from JSON exported by the ``#export_python_registry`` command in Lean.
+
+    Attributes:
+        funcs: All ``@[python]``-annotated functions.
+        types: All types registered via ``derive_python``.
+    """
     funcs: tuple[FuncInfo, ...] = field(default_factory=tuple)
     types: tuple[TypeInfo, ...] = field(default_factory=tuple)
 

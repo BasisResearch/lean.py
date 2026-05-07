@@ -18,14 +18,14 @@ Effortless interop between **Lean 4** and **Python**, in both directions.
 ### Python side
 
 ```bash
-uv pip install "lean_py @ git+https://github.com/kiranandcode/lean.py"
+uv pip install "lean_py @ git+https://github.com/BasisResearch/lean.py"
 ```
 
 or in `pyproject.toml`:
 
 ```toml
 [project]
-dependencies = ["lean_py @ git+https://github.com/kiranandcode/lean.py"]
+dependencies = ["lean_py @ git+https://github.com/BasisResearch/lean.py"]
 ```
 
 The Python package discovers `lean.h` and `libleanshared` from the active
@@ -39,7 +39,7 @@ Add to your `lakefile.toml`:
 ```toml
 [[require]]
 name = "LeanPy"
-git  = "https://github.com/kiranandcode/lean.py"
+git  = "https://github.com/BasisResearch/lean.py"
 
 [[lean_lib]]
 name = "MyLib"
@@ -78,7 +78,7 @@ through the Python-loaded `.so`/`.dylib` must also appear in
 ```toml
 [[require]]
 name = "LeanPy"
-git  = "https://github.com/kiranandcode/lean.py"
+git  = "https://github.com/BasisResearch/lean.py"
 
 [[require]]
 name = "batteries"

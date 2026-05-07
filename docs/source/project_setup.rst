@@ -47,7 +47,7 @@ Edit ``lakefile.toml``:
 
    [[require]]
    name = "LeanPy"
-   git  = "https://github.com/kiranandcode/lean.py"
+   git  = "https://github.com/BasisResearch/lean.py"
 
    [[lean_lib]]
    name = "MyLib"
@@ -132,7 +132,7 @@ Step 4: Create the Python Project
    name = "my-project"
    version = "0.1.0"
    requires-python = ">=3.12"
-   dependencies = ["lean_py @ git+https://github.com/kiranandcode/lean.py"]
+   dependencies = ["lean_py @ git+https://github.com/BasisResearch/lean.py"]
 
    [build-system]
    requires = ["hatchling"]
@@ -260,3 +260,35 @@ lean-py automatically marshals these types between Lean and Python:
    * - User structures
      - ``LeanInductiveValue``
      - Callable constructor
+
+Pattern Matching on Inductives
+------------------------------
+
+Constructor classes on inductive type namespaces support Python 3.10+
+structural pattern matching via ``__match_args__``:
+
+.. code-block:: python
+
+   Shape = lib.Shape
+
+   match lib.area_input():
+       case Shape.circle(radius):
+           print(f"circle: pi * {radius}^2")
+       case Shape.rect(w, h):
+           print(f"rect: {w} * {h}")
+
+Each constructor class also works with ``isinstance``:
+
+.. code-block:: python
+
+   val = lib.Shape.circle(5)
+   assert isinstance(val, Shape.circle)     # True
+   assert not isinstance(val, Shape.rect)   # True
+
+For enum-like inductives (all nullary constructors), the classes still
+work as values for backward compatibility:
+
+.. code-block:: python
+
+   Color = lib.Color
+   lib.colorId(Color.red)  # 0

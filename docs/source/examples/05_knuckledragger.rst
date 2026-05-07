@@ -8,7 +8,7 @@ example, but swaps the backend: instead of SymPy, the oracle is
 an SMT solver, so it can handle a richer fragment -- quantified formulas,
 integer arithmetic, and more.
 
-`View full source on GitHub <https://github.com/kiranandcode/lean.py/tree/main/examples/05_knuckledragger>`_
+`View full source on GitHub <https://github.com/BasisResearch/lean.py/tree/main/examples/05_knuckledragger>`_
 
 Same architecture, different solver
 ------------------------------------
@@ -71,27 +71,20 @@ cannot:
        var = z3.Int(binder_name)
        return z3.ForAll([var], expr_to_z3(body, bound=[var] + bound))
 
-Checking with Z3
------------------
+Checking with Knuckledragger
+-----------------------------
 
-The proposition checker uses Z3's solver. If Knuckledragger is installed,
-it uses the higher-level ``lemma`` wrapper; otherwise raw Z3:
+The proposition checker delegates to Knuckledragger's ``lemma`` wrapper,
+which calls Z3 under the hood:
 
 .. code-block:: python
 
-   def z3_proves(prop) -> bool:
-       s = z3.Solver()
-       s.add(z3.Not(prop))
-       return s.check() == z3.unsat
-
    def check_prop(prop) -> bool:
-       if HAS_KDR:
-           try:
-               kd.lemma(prop)
-               return True
-           except Exception:
-               return False
-       return z3_proves(prop)
+       try:
+           kdr.lemma(prop)
+           return True
+       except Exception:
+           return False
 
 Using the tactic
 ----------------
@@ -111,14 +104,7 @@ Running
 
    cd examples/05_knuckledragger
    cd lean && lake build && cd ..
-   uv pip install z3-solver
    uv run --project python python/main.py
-
-Optionally add Knuckledragger for its higher-level interface:
-
-.. code-block:: bash
-
-   uv add --project python kdrag
 
 Comparing SymPy and Z3
 -----------------------
@@ -141,7 +127,7 @@ Comparing SymPy and Z3
      - Yes
    * - Dependency
      - ``sympy``
-     - ``z3-solver``
+     - ``z3-solver`` + ``kdrag``
 
 Both share the same architecture: Lean sends ``Lean.Expr`` to Python,
 Python converts and checks, Lean closes the goal with an oracle. The only
@@ -154,5 +140,5 @@ What to take away
   and you can back a Lean tactic with any Python-accessible decision
   procedure.
 * Z3 handles **richer formulas** (quantifiers, SMT theories) than SymPy.
-* Knuckledragger is **optional** -- the tactic falls back to raw Z3 if
-  it's not installed.
+* Knuckledragger wraps Z3 with a **higher-level API** (``kdr.lemma``)
+  that handles proof logging and validation.

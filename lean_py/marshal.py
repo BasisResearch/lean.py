@@ -138,6 +138,47 @@ def _is_enum_tag_only(ti: TypeInfo) -> bool:
 # Wrapper for a registered user inductive (`derive_python`)
 # ----------------------------------------------------------------------------
 
+class _CtorMeta(type):
+    """Metaclass for constructor pattern-match classes.
+
+    Overrides ``isinstance`` so that ``isinstance(value, Name.str)``
+    returns True when ``value`` is a ``LeanInductiveValue`` with the
+    matching constructor name and type name.  Also provides
+    ``__match_args__`` for Python 3.10+ structural pattern matching.
+    """
+
+    def __call__(cls, *args):
+        n_fields = len(cls.__match_args__) if hasattr(cls, '__match_args__') else 0
+        if len(args) != n_fields:
+            raise TypeError(
+                f"{cls._type_name}.{cls._ctor_name} expects {n_fields} args, "
+                f"got {len(args)}")
+        return LeanInductiveValue(cls._type_name, cls._ctor_name, cls._tag, tuple(args))
+
+    def __instancecheck__(cls, instance):
+        if isinstance(instance, LeanInductiveValue):
+            return instance.ctor == cls._ctor_name and instance._type_name == cls._type_name
+        if type(instance) is _CtorMeta:
+            # Allow isinstance(Color.red, Color.red) — both are _CtorMeta classes
+            return instance._ctor_name == cls._ctor_name and instance._type_name == cls._type_name
+        return False
+
+    def __repr__(cls):
+        return f"{cls._type_name}.{cls._ctor_name}"
+
+    def __eq__(cls, other):
+        if isinstance(other, LeanInductiveValue):
+            return (other._type_name == cls._type_name
+                    and other.ctor == cls._ctor_name
+                    and other.fields == ())
+        if isinstance(other, _CtorMeta):
+            return cls._type_name == other._type_name and cls._ctor_name == other._ctor_name
+        return NotImplemented
+
+    def __hash__(cls):
+        return hash((cls._type_name, cls._ctor_name))
+
+
 class LeanInductiveValue:
     """A Python representation of a Lean inductive constructor.
 
@@ -145,6 +186,16 @@ class LeanInductiveValue:
         ctor:   the constructor name (unqualified).
         tag:    integer tag.
         fields: tuple of decoded Python field values in declaration order.
+
+    Supports Python 3.10+ structural pattern matching::
+
+        match name_value:
+            case Name.str(parent, leaf):
+                print(f"name: {leaf}")
+            case Name.anonymous():
+                print("anonymous")
+
+    Fields can also be accessed by index (``value._0``, ``value._1``, etc.).
     """
 
     __slots__ = ("ctor", "tag", "fields", "_type_name")
@@ -155,17 +206,30 @@ class LeanInductiveValue:
         self.tag = tag
         self.fields = fields
 
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_") and name[1:].isdigit():
+            idx = int(name[1:])
+            if idx < len(self.fields):
+                return self.fields[idx]
+            raise AttributeError(
+                f"field index {idx} out of range (have {len(self.fields)} fields)")
+        raise AttributeError(name)
+
     def __repr__(self) -> str:
         if not self.fields:
             return f"{self._type_name}.{self.ctor}"
         return f"{self._type_name}.{self.ctor}({', '.join(repr(f) for f in self.fields)})"
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, LeanInductiveValue):
-            return NotImplemented
-        return (self._type_name, self.tag, self.fields) == (
-            other._type_name, other.tag, other.fields,
-        )
+        if isinstance(other, LeanInductiveValue):
+            return (self._type_name, self.tag, self.fields) == (
+                other._type_name, other.tag, other.fields,
+            )
+        if type(other) is _CtorMeta:
+            return (self._type_name == other._type_name
+                    and self.ctor == other._ctor_name
+                    and self.fields == ())
+        return NotImplemented
 
     def __hash__(self) -> int:
         return hash((self._type_name, self.tag, self.fields))
@@ -250,8 +314,13 @@ class Marshaller:
         return LeanInductiveValue(ti.name, ctor.name, tag, tuple(fields))
 
     def _encode_inductive(self, ti: TypeInfo, value: Any) -> Any:
-        # Accept either LeanInductiveValue or a (ctor_name, *args) tuple.
-        if isinstance(value, LeanInductiveValue):
+        # Accept LeanInductiveValue, _CtorMeta classes, or (ctor_name, *args) tuple.
+        if type(value) is _CtorMeta:
+            ctor = next((c for c in ti.ctors if c.name == value._ctor_name), None)
+            if ctor is None:
+                raise ValueError(f"unknown ctor {value._ctor_name} for {ti.name}")
+            field_values = ()
+        elif isinstance(value, LeanInductiveValue):
             ctor = next((c for c in ti.ctors if c.name == value.ctor), None)
             if ctor is None:
                 raise ValueError(f"unknown ctor {value.ctor} for {ti.name}")
@@ -528,6 +597,8 @@ class Marshaller:
                 def to_lean(v):
                     if isinstance(v, LeanInductiveValue):
                         return ffi.lean_box(v.tag)
+                    if type(v) is _CtorMeta:
+                        return ffi.lean_box(v._tag)
                     if isinstance(v, int):
                         return ffi.lean_box(v)
                     raise TypeError(f"cannot encode {v!r} as enum {ti.name}")

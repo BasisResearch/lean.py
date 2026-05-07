@@ -6,7 +6,7 @@ arithmetic goals by delegating to SymPy. When Lean sees a goal like
 ``(1 : Int) + 1 = 2``, it sends the entire ``Lean.Expr`` tree to Python,
 SymPy verifies it, and the goal is closed.
 
-`View full source on GitHub <https://github.com/kiranandcode/lean.py/tree/main/examples/04_sympy_tactic>`_
+`View full source on GitHub <https://github.com/BasisResearch/lean.py/tree/main/examples/04_sympy_tactic>`_
 
 The architecture
 ----------------

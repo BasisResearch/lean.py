@@ -30,7 +30,7 @@ from typing import Any, Callable
 
 from lean_py.base_types import LeanObject
 from lean_py.lean_ffi import get_lean_ffi
-from lean_py.marshal import LeanInductiveValue, Marshaller, TypeWrapper
+from lean_py.marshal import LeanInductiveValue, Marshaller, TypeWrapper, _CtorMeta
 from lean_py.registry import FuncInfo, LibraryRegistry, TypeInfo
 from lean_py.utils import lean_lib_dir, run_command, shared_lib_extension
 
@@ -109,26 +109,43 @@ def _ensure_rpath(dylib: Path) -> None:
 class _InductiveType:
     """Generated namespace for a Lean inductive's constructors.
 
-    For each constructor, exposes a callable that produces a
-    `LeanInductiveValue`. For enum-like (no-arg) ctors, exposes them
-    as class attributes that are pre-built `LeanInductiveValue`s.
+    Each constructor is exposed as a :class:`~lean_py.marshal._CtorMeta`
+    class attribute that:
+
+    - Is callable: ``Shape.circle(5)`` creates a :class:`LeanInductiveValue`.
+    - Works with ``isinstance``: ``isinstance(val, Shape.circle)`` checks the
+      constructor name.
+    - Supports pattern matching (Python 3.10+)::
+
+          match shape_val:
+              case Shape.circle(radius):
+                  ...
+              case Shape.rect(w, h):
+                  ...
+
+    Nullary constructors (e.g. ``Color.red``) also expose ``.ctor``, ``.tag``,
+    and ``.fields`` attributes for backward compatibility.
     """
 
     def __init__(self, ti: TypeInfo, marshaller: Marshaller):
         self._ti = ti
         self._marshaller = marshaller
         for ctor in ti.ctors:
-            if not ctor.fields:
-                v = LeanInductiveValue(ti.name, ctor.name, ctor.tag, ())
-                setattr(self, ctor.name, v)
-            else:
-                def _make(*args, _c=ctor):
-                    if len(args) != len(_c.fields):
-                        raise TypeError(
-                            f"{ti.name}.{_c.name} expects {len(_c.fields)} args, got {len(args)}"
-                        )
-                    return LeanInductiveValue(ti.name, _c.name, _c.tag, tuple(args))
-                setattr(self, ctor.name, _make)
+            n_fields = len(ctor.fields)
+            match_args = tuple(f"_{i}" for i in range(n_fields))
+
+            attrs = {
+                '_ctor_name': ctor.name,
+                '_type_name': ti.name,
+                '_tag': ctor.tag,
+                '__match_args__': match_args,
+                # Backward compat for nullary ctors used as values:
+                'ctor': ctor.name,
+                'tag': ctor.tag,
+                'fields': (),
+            }
+            cls = _CtorMeta(ctor.name, (), attrs)
+            setattr(self, ctor.name, cls)
 
     def __repr__(self) -> str:
         ctor_names = ", ".join(c.name for c in self._ti.ctors)
