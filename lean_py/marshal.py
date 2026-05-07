@@ -28,7 +28,7 @@ from ctypes import (
 )
 from typing import Any, Callable
 
-from lean_py._runtime import get_lean_ffi, get_structs
+from lean_py._runtime import _ptr_as_int, get_lean_ffi, get_structs
 from lean_py.registry import CtorInfo, FuncInfo, LibraryRegistry, TypeInfo, TypeRepr
 
 
@@ -236,6 +236,120 @@ class LeanInductiveValue:
 
 
 # ============================================================================
+#  Smart constructors for types with @[extern] ctor annotations
+# ============================================================================
+
+
+def _build_smart_ctors(ffi) -> dict[tuple[str, str], Callable]:
+    """Register C smart constructors for Lean kernel types.
+
+    ``Lean.Name``, ``Lean.Level``, and ``Lean.Expr`` constructors use
+    ``@[extern]`` annotations in the Lean source that compute internal
+    hash / data scalar fields.  Using bare ``lean_alloc_ctor`` for these
+    types produces objects with missing scalar data, breaking environment
+    lookups and other runtime operations.  We call the real C functions
+    instead.
+
+    Each entry maps ``(type_name, ctor_name)`` to a callable
+    ``(ffi, ObjPtr, encoded_children: list) -> lean_object*``.
+    The ``ObjPtr`` is a ctypes pointer type for casting the result.
+
+    **Ownership**: despite the ``@&`` (borrowed) annotation in Lean source,
+    these C constructors store child pointers directly **without**
+    ``lean_inc``.  The Lean compiler's codegen relies on this: it never
+    emits a ``lean_dec`` for arguments that are stored into the new ctor.
+    From Python we must therefore **not** ``lean_dec`` the children after
+    calling the smart constructor — the new object takes ownership of the
+    one reference we pass in.
+    """
+    ctors: dict[tuple[str, str], Callable] = {}
+    lib = ffi.lib
+
+    def _sym(name):
+        try:
+            return getattr(lib, name)
+        except AttributeError:
+            return None
+
+    def _call(fn, obj_args, ObjPtr):
+        """Call *fn* with ``c_void_p`` args, cast result to *ObjPtr*."""
+        fn.restype = c_void_p
+        fn.argtypes = [c_void_p] * len(obj_args)
+        raw = fn(*[_ptr_as_int(a) for a in obj_args])
+        return ctypes.cast(c_void_p(raw), ObjPtr)
+
+    # -- Lean.Name ----------------------------------------------------------
+    _nmks = _sym("lean_name_mk_string")
+    if _nmks:
+        def _name_str(ffi, ObjPtr, ch):
+            return _call(_nmks, ch, ObjPtr)
+        ctors[("Lean.Name", "str")] = _name_str
+
+    _nmkn = _sym("lean_name_mk_numeral")
+    if _nmkn:
+        def _name_num(ffi, ObjPtr, ch):
+            return _call(_nmkn, ch, ObjPtr)
+        ctors[("Lean.Name", "num")] = _name_num
+
+    # -- Lean.Level ---------------------------------------------------------
+    _lvl = {n: _sym(n) for n in [
+        "lean_level_mk_zero", "lean_level_mk_succ", "lean_level_mk_max",
+        "lean_level_mk_imax", "lean_level_mk_param", "lean_level_mk_mvar",
+    ]}
+    for cname, sym, nargs in [
+        ("zero", "lean_level_mk_zero", 0),
+        ("succ", "lean_level_mk_succ", 1),
+        ("max",  "lean_level_mk_max",  2),
+        ("imax", "lean_level_mk_imax", 2),
+        ("param","lean_level_mk_param",1),
+        ("mvar", "lean_level_mk_mvar", 1),
+    ]:
+        fn = _lvl.get(sym)
+        if fn:
+            def _mk(ffi, ObjPtr, ch, _fn=fn, _n=nargs):
+                return _call(_fn, ch[:_n], ObjPtr)
+            ctors[("Lean.Level", cname)] = _mk
+
+    # -- Lean.Expr ----------------------------------------------------------
+    # BinderInfo / Bool trailing args are passed as uint8 (the unboxed
+    # scalar value), NOT as lean_object*.
+    _expr = {
+        "bvar":    (_sym("lean_expr_mk_bvar"),    1, False),
+        "fvar":    (_sym("lean_expr_mk_fvar"),    1, False),
+        "mvar":    (_sym("lean_expr_mk_mvar"),    1, False),
+        "sort":    (_sym("lean_expr_mk_sort"),    1, False),
+        "const":   (_sym("lean_expr_mk_const"),   2, False),
+        "app":     (_sym("lean_expr_mk_app"),     2, False),
+        "lam":     (_sym("lean_expr_mk_lambda"),  4, True),
+        "forallE": (_sym("lean_expr_mk_forall"),  4, True),
+        "letE":    (_sym("lean_expr_mk_let"),     5, True),
+        "lit":     (_sym("lean_expr_mk_lit"),     1, False),
+        "mdata":   (_sym("lean_expr_mk_mdata"),   2, False),
+        "proj":    (_sym("lean_expr_mk_proj"),    3, False),
+    }
+    for cname, (fn, nargs, scalar_tail) in _expr.items():
+        if fn is None:
+            continue
+
+        def _mk(ffi, ObjPtr, ch, _fn=fn, _n=nargs, _st=scalar_tail):
+            c_args = []
+            for i, c in enumerate(ch[:_n]):
+                if _st and i == _n - 1:
+                    # Trailing BinderInfo / Bool — unbox to uint8.
+                    c_args.append(ffi.lean_unbox(c) if ffi.lean_is_scalar(c)
+                                  else _ptr_as_int(c))
+                else:
+                    c_args.append(_ptr_as_int(c))
+            _fn.restype = c_void_p
+            _fn.argtypes = [c_void_p] * len(c_args)
+            raw = _fn(*c_args)
+            return ctypes.cast(c_void_p(raw), ObjPtr)
+        ctors[("Lean.Expr", cname)] = _mk
+
+    return ctors
+
+
+# ============================================================================
 #  Marshaller: builds wrappers from a registry
 # ============================================================================
 
@@ -249,6 +363,7 @@ class Marshaller:
         self._structs = get_structs()
         self._lean_object_ptr = self._structs["_LeanObjectPtr"]
         self._cache: dict[str, TypeWrapper] = {}
+        self._smart_ctors = _build_smart_ctors(self.ffi)
 
     # -- helpers -------------------------------------------------------------
 
@@ -338,12 +453,28 @@ class Marshaller:
                 f"got {len(field_values)}"
             )
         if not ctor.fields:
+            # Check for nullary smart constructors (e.g. Level.zero).
+            smart = self._smart_ctors.get((ti.name, ctor.name))
+            if smart is not None:
+                return smart(self.ffi, self._lean_object_ptr, [])
             return self.ffi.lean_box(ctor.tag)
-        # Allocate a ctor object with tag and num_objs.
-        obj = self.ffi.lean_alloc_ctor(ctor.tag, len(ctor.fields), 0)
-        for i, (ftype, fv) in enumerate(zip(ctor.fields, field_values)):
+
+        # Encode child values first (each returns an owned pointer).
+        children = []
+        for ftype, fv in zip(ctor.fields, field_values):
             fwrap = self.wrapper_for(ftype)
-            child = fwrap.to_lean(fv)
+            children.append(fwrap.to_lean(fv))
+
+        # If a smart constructor exists, use it (handles internal scalar
+        # fields like Name hashes and Expr Data).  The smart ctor borrows
+        # the children and decrements them; it returns an owned result.
+        smart = self._smart_ctors.get((ti.name, ctor.name))
+        if smart is not None:
+            return smart(self.ffi, self._lean_object_ptr, children)
+
+        # Default: allocate a plain ctor object.
+        obj = self.ffi.lean_alloc_ctor(ctor.tag, len(ctor.fields), 0)
+        for i, child in enumerate(children):
             self.ffi.lean_ctor_set(obj, i, child)
         return obj
 

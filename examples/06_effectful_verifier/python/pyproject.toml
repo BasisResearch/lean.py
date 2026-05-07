@@ -1,0 +1,10 @@
+[project]
+name = "lean-py-effectful-verifier"
+version = "0.1.0"
+description = "Refinement-type verifier using effectful + lean-py"
+requires-python = ">=3.12"
+dependencies = ["lean_py", "effectful"]
+
+[tool.uv.sources]
+lean_py = { path = "../../..", editable = true }
+effectful = { path = "../../../_examples/effectful", editable = true }

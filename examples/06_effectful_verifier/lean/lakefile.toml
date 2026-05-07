@@ -1,0 +1,16 @@
+name = "EffectfulVerifier"
+version = "0.1.0"
+defaultTargets = ["EffectfulVerifier"]
+
+[[require]]
+name = "LeanPy"
+path = "../../.."
+
+[[lean_lib]]
+name = "EffectfulVerifier"
+moreLinkObjs = ["LeanPy/LeanPy:static", "LeanPy/leanPyNative:static", "Pantograph/Pantograph:static"]
+precompileModules = true
+defaultFacets = ["shared"]
+moreLinkArgs = [
+  "-Wl,-headerpad_max_install_names",
+]

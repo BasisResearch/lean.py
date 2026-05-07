@@ -32,6 +32,7 @@ Effortless interop between **Lean 4** and **Python**, in both directions.
    examples/03_numpy_typed
    examples/04_sympy_tactic
    examples/05_knuckledragger
+   examples/06_effectful_verifier
 
 .. toctree::
    :maxdepth: 2

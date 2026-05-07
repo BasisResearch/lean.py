@@ -1,0 +1,91 @@
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[[package]]
+name = "effectful"
+version = "0.3.1"
+source = { editable = "../../../_examples/effectful" }
+
+[package.metadata]
+requires-dist = [
+    { name = "autoflake", marker = "extra == 'llm'" },
+    { name = "effectful", extras = ["torch", "pyro", "jax", "numpyro", "docs", "prettyprinter"], marker = "extra == 'test'" },
+    { name = "effectful", extras = ["torch", "pyro", "jax", "numpyro", "llm", "prettyprinter"], marker = "extra == 'docs'" },
+    { name = "jax", marker = "extra == 'jax'" },
+    { name = "jax", marker = "extra == 'numpyro'", specifier = "<0.10" },
+    { name = "litellm", marker = "extra == 'llm'" },
+    { name = "mypy", marker = "extra == 'llm'" },
+    { name = "mypy", marker = "extra == 'test'" },
+    { name = "myst-parser", marker = "extra == 'docs'" },
+    { name = "nbqa", marker = "extra == 'test'" },
+    { name = "nbsphinx", marker = "extra == 'docs'" },
+    { name = "nbval", marker = "extra == 'test'" },
+    { name = "numpyro", marker = "extra == 'numpyro'", specifier = ">=0.19" },
+    { name = "pillow", marker = "extra == 'llm'" },
+    { name = "prettyprinter", marker = "extra == 'prettyprinter'" },
+    { name = "pydantic", marker = "extra == 'llm'" },
+    { name = "pypandoc-binary", marker = "extra == 'docs'", specifier = "<1.16" },
+    { name = "pyro-ppl", marker = "extra == 'pyro'", specifier = ">=1.9.1" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "pytest-benchmark", marker = "extra == 'test'" },
+    { name = "pytest-cov", marker = "extra == 'test'" },
+    { name = "pytest-xdist", marker = "extra == 'test'" },
+    { name = "restrictedpython", marker = "extra == 'llm'", specifier = ">=8.1" },
+    { name = "ruff", marker = "extra == 'test'" },
+    { name = "sphinx", marker = "extra == 'docs'" },
+    { name = "sphinx-autodoc-typehints", marker = "extra == 'docs'", specifier = ">=3.6,<3.9" },
+    { name = "sphinx-rtd-theme", marker = "extra == 'docs'" },
+    { name = "sphinxcontrib-bibtex", marker = "extra == 'docs'" },
+    { name = "tenacity", marker = "extra == 'llm'" },
+    { name = "torch", marker = "extra == 'torch'" },
+    { name = "typing-extensions", marker = "extra == 'llm'" },
+]
+provides-extras = ["torch", "pyro", "jax", "numpyro", "llm", "prettyprinter", "docs", "test"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "effectful", extras = ["torch", "pyro", "jax", "numpyro", "llm", "docs", "test"] }]
+
+[[package]]
+name = "lean-py"
+version = "0.1.0"
+source = { editable = "../../../" }
+dependencies = [
+    { name = "pycparser" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pycparser", specifier = ">=2.22" },
+    { name = "sphinx", marker = "extra == 'docs'" },
+    { name = "sphinx-autodoc-typehints", marker = "extra == 'docs'" },
+    { name = "sphinx-rtd-theme", marker = "extra == 'docs'" },
+]
+provides-extras = ["docs"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.0" }]
+
+[[package]]
+name = "lean-py-effectful-verifier"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "effectful" },
+    { name = "lean-py" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "effectful", editable = "../../../_examples/effectful" },
+    { name = "lean-py", editable = "../../../" },
+]
+
+[[package]]
+name = "pycparser"
+version = "3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1b/7d/92392ff7815c21062bea51aa7b87d45576f649f16458d78b7cf94b9ab2e6/pycparser-3.0.tar.gz", hash = "sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29", size = 103492, upload-time = "2026-01-21T14:26:51.89Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl", hash = "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992", size = 48172, upload-time = "2026-01-21T14:26:50.693Z" },
+]
