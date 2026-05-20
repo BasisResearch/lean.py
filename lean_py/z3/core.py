@@ -73,6 +73,45 @@ def DeclareSort(name: str) -> UninterpretedSortRef:
     return UninterpretedSortRef(name)
 
 
+class BitVecSortRef(SortRef):
+    """Fixed-width bit-vector sort, maps to Lean's ``BitVec n``."""
+
+    __slots__ = ("_width",)
+
+    def __init__(self, width: int) -> None:
+        super().__init__(f"(BitVec {width})")
+        self._width = width
+
+    @property
+    def size(self) -> int:
+        return self._width
+
+
+def BitVecSort(n: int) -> BitVecSortRef:
+    return BitVecSortRef(n)
+
+
+class ArraySortRef(SortRef):
+    """SMT array sort, maps to Lean function type ``dom → rng``."""
+
+    __slots__ = ("_domain", "_range")
+
+    def __init__(self, domain: SortRef, range_sort: SortRef) -> None:
+        super().__init__(f"({domain.to_lean()} \u2192 {range_sort.to_lean()})")
+        self._domain = domain
+        self._range = range_sort
+
+    def domain(self) -> SortRef:
+        return self._domain
+
+    def range(self) -> SortRef:
+        return self._range
+
+
+def ArraySort(domain: SortRef, range_sort: SortRef) -> ArraySortRef:
+    return ArraySortRef(domain, range_sort)
+
+
 # ---------------------------------------------------------------------------
 # Expressions
 # ---------------------------------------------------------------------------
@@ -232,6 +271,129 @@ class ArithRef(ExprRef):
         )
 
 
+class BitVecRef(ExprRef):
+    """Bit-vector expression, maps to Lean's ``BitVec n``."""
+
+    __slots__ = ()
+
+    def __init__(
+        self,
+        lean: str,
+        sort: BitVecSortRef,
+        vars: frozenset[tuple[str, str]] = frozenset(),
+    ) -> None:
+        super().__init__(lean, sort, vars)
+
+    def _binop(self, op: str, other: BitVecRef | int) -> BitVecRef:
+        other = _coerce_bv(other, self._sort)
+        return BitVecRef(
+            f"({self._lean} {op} {other._lean})",
+            self._sort,  # type: ignore[arg-type]
+            _merge(self._vars, other._vars),
+        )
+
+    # Arithmetic
+    def __add__(self, other: BitVecRef | int) -> BitVecRef:
+        return self._binop("+", other)
+
+    def __radd__(self, other: int) -> BitVecRef:
+        return _coerce_bv(other, self._sort)._binop("+", self)
+
+    def __sub__(self, other: BitVecRef | int) -> BitVecRef:
+        return self._binop("-", other)
+
+    def __rsub__(self, other: int) -> BitVecRef:
+        return _coerce_bv(other, self._sort)._binop("-", self)
+
+    def __mul__(self, other: BitVecRef | int) -> BitVecRef:
+        return self._binop("*", other)
+
+    def __rmul__(self, other: int) -> BitVecRef:
+        return _coerce_bv(other, self._sort)._binop("*", self)
+
+    def __neg__(self) -> BitVecRef:
+        return BitVecRef(
+            f"(-{self._lean})",
+            self._sort,  # type: ignore[arg-type]
+            self._vars,
+        )
+
+    # Bitwise — Lean uses &&&, |||, ^^^, ~~~, <<<, >>>
+    def __and__(self, other: BitVecRef | int) -> BitVecRef:
+        return self._binop("&&&", other)
+
+    def __rand__(self, other: int) -> BitVecRef:
+        return _coerce_bv(other, self._sort)._binop("&&&", self)
+
+    def __or__(self, other: BitVecRef | int) -> BitVecRef:
+        return self._binop("|||", other)
+
+    def __ror__(self, other: int) -> BitVecRef:
+        return _coerce_bv(other, self._sort)._binop("|||", self)
+
+    def __xor__(self, other: BitVecRef | int) -> BitVecRef:
+        return self._binop("^^^", other)
+
+    def __rxor__(self, other: int) -> BitVecRef:
+        return _coerce_bv(other, self._sort)._binop("^^^", self)
+
+    def __invert__(self) -> BitVecRef:
+        return BitVecRef(
+            f"(~~~{self._lean})",
+            self._sort,  # type: ignore[arg-type]
+            self._vars,
+        )
+
+    def __lshift__(self, other: BitVecRef | int) -> BitVecRef:
+        return self._binop("<<<", other)
+
+    def __rshift__(self, other: BitVecRef | int) -> BitVecRef:
+        return self._binop(">>>", other)
+
+    # Comparisons (unsigned in Lean by default)
+    def __lt__(self, other: BitVecRef | int) -> BoolRef:
+        other = _coerce_bv(other, self._sort)
+        return BoolRef(
+            f"({self._lean} < {other._lean})",
+            _merge(self._vars, other._vars),
+        )
+
+    def __le__(self, other: BitVecRef | int) -> BoolRef:
+        other = _coerce_bv(other, self._sort)
+        return BoolRef(
+            f"({self._lean} \u2264 {other._lean})",
+            _merge(self._vars, other._vars),
+        )
+
+    def __gt__(self, other: BitVecRef | int) -> BoolRef:
+        other = _coerce_bv(other, self._sort)
+        return BoolRef(
+            f"({self._lean} > {other._lean})",
+            _merge(self._vars, other._vars),
+        )
+
+    def __ge__(self, other: BitVecRef | int) -> BoolRef:
+        other = _coerce_bv(other, self._sort)
+        return BoolRef(
+            f"({self._lean} \u2265 {other._lean})",
+            _merge(self._vars, other._vars),
+        )
+
+
+class ArrayRef(ExprRef):
+    """SMT array expression, maps to Lean function type."""
+
+    __slots__ = ()
+
+    def __init__(
+        self,
+        lean: str,
+        sort: ArraySortRef,
+        vars: frozenset[tuple[str, str]] = frozenset(),
+    ) -> None:
+        super().__init__(lean, sort, vars)
+
+
 class QuantifierRef(BoolRef):
     """Quantified expression (ForAll / Exists)."""
 
@@ -345,12 +507,30 @@ def Bools(names: str) -> tuple[BoolRef, ...]:
     return tuple(Bool(n) for n in names.split())
 
 
+def BitVec(name: str, width: int) -> BitVecRef:
+    s = BitVecSort(width)
+    return BitVecRef(name, s, frozenset([(name, s.to_lean())]))
+
+
+def BitVecs(names: str, width: int) -> tuple[BitVecRef, ...]:
+    return tuple(BitVec(n, width) for n in names.split())
+
+
+def Array(name: str, domain: SortRef, range_sort: SortRef) -> ArrayRef:
+    s = ArraySort(domain, range_sort)
+    return ArrayRef(name, s, frozenset([(name, s.to_lean())]))
+
+
 def Const(name: str, sort: SortRef) -> ExprRef:
     v = frozenset([(name, sort.to_lean())])
     if isinstance(sort, BoolSortRef):
         return BoolRef(name, v)
     if isinstance(sort, ArithSortRef):
         return ArithRef(name, sort, v)
+    if isinstance(sort, BitVecSortRef):
+        return BitVecRef(name, sort, v)
+    if isinstance(sort, ArraySortRef):
+        return ArrayRef(name, sort, v)
     return ExprRef(name, sort, v)
 
 
@@ -378,6 +558,97 @@ def RealVal(n: int | float | str) -> ArithRef:
 
 def BoolVal(b: bool) -> BoolRef:
     return BoolRef("True" if b else "False")
+
+
+def BitVecVal(val: int, width: int) -> BitVecRef:
+    s = BitVecSort(width)
+    return BitVecRef(f"({val} : BitVec {width})", s)
+
+
+# ---------------------------------------------------------------------------
+# Array operations (SMT theory of arrays → Lean function types)
+# ---------------------------------------------------------------------------
+
+
+def Select(a: ArrayRef, idx: ExprRef) -> ExprRef:
+    """Read from array. Maps to function application in Lean."""
+    sort = a._sort
+    if not isinstance(sort, ArraySortRef):
+        raise TypeError(f"Select requires ArrayRef, got {type(a)}")
+    return ExprRef(
+        f"({a._lean} {idx._lean})",
+        sort.range(),
+        _merge(a._vars, idx._vars),
+    )
+
+
+def Store(a: ArrayRef, idx: ExprRef, val: ExprRef) -> ArrayRef:
+    """Write to array: ``(fun x => if x = i then v else a x)``."""
+    sort = a._sort
+    if not isinstance(sort, ArraySortRef):
+        raise TypeError(f"Store requires ArrayRef, got {type(a)}")
+    merged = frozenset().union(a._vars, idx._vars, val._vars)
+    dom = sort._domain.to_lean()
+    return ArrayRef(
+        f"(fun (_idx : {dom}) => if _idx = {idx._lean} then {val._lean} else {a._lean} _idx)",
+        sort,
+        merged,
+    )
+
+
+def K(domain: SortRef, val: ExprRef) -> ArrayRef:
+    """Constant array (all indices map to ``val``).
+    Maps to ``fun (_ : dom) => val`` in Lean."""
+    sort = ArraySort(domain, val._sort)
+    return ArrayRef(
+        f"(fun (_ : {domain.to_lean()}) => {val._lean})",
+        sort,
+        val._vars,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Datatype builder
+# ---------------------------------------------------------------------------
+
+
+class _DatatypeBuilder:
+    """Build an algebraic datatype.
+
+    The resulting sort is uninterpreted, with constructor functions
+    generated as ``FuncDeclRef`` instances.  Mirrors the z3py
+    ``Datatype`` / ``create()`` pattern.
+    """
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._ctors: list[tuple[str, tuple[tuple[str, SortRef], ...]]] = []
+
+    def declare(self, ctor_name: str, *fields: tuple[str, SortRef]) -> None:
+        self._ctors.append((ctor_name, tuple(fields)))
+
+    def create(self) -> UninterpretedSortRef:
+        sort = UninterpretedSortRef(self._name)
+        for ctor_name, fields in self._ctors:
+            if fields:
+                domain = tuple(f[1] for f in fields)
+                func = FuncDeclRef(ctor_name, domain, sort)
+                setattr(sort, ctor_name, func)
+                # Accessor functions
+                for field_name, field_sort in fields:
+                    acc = FuncDeclRef(field_name, (sort,), field_sort)
+                    setattr(sort, field_name, acc)
+            else:
+                # Nullary constructor: a constant of this sort
+                val = ExprRef(ctor_name, sort, frozenset([
+                    (ctor_name, sort.to_lean()),
+                ]))
+                setattr(sort, ctor_name, val)
+        return sort
+
+
+def Datatype(name: str) -> _DatatypeBuilder:
+    return _DatatypeBuilder(name)
 
 
 # ---------------------------------------------------------------------------
@@ -479,9 +750,19 @@ def _coerce_arith(v: ArithRef | int | float, sort: SortRef) -> ArithRef:
     raise TypeError(f"Cannot coerce {type(v)} to ArithRef")
 
 
+def _coerce_bv(v: BitVecRef | int, sort: SortRef) -> BitVecRef:
+    if isinstance(v, BitVecRef):
+        return v
+    if isinstance(v, int) and isinstance(sort, BitVecSortRef):
+        return BitVecRef(f"({v} : BitVec {sort._width})", sort)
+    raise TypeError(f"Cannot coerce {type(v)} to BitVecRef")
+
+
 def _coerce_val(v: int | float, sort: SortRef) -> ExprRef:
     if isinstance(sort, ArithSortRef):
         return ArithRef(f"({v} : {sort.to_lean()})", sort)
+    if isinstance(sort, BitVecSortRef):
+        return BitVecRef(f"({v} : BitVec {sort._width})", sort)
     return ExprRef(str(v), sort)
 
 
@@ -492,16 +773,24 @@ def _coerce_val(v: int | float, sort: SortRef) -> ExprRef:
 __all__ = [
     # Sorts
     "SortRef", "BoolSortRef", "ArithSortRef", "UninterpretedSortRef",
+    "BitVecSortRef", "ArraySortRef",
     "BoolSort", "IntSort", "NatSort", "RealSort", "DeclareSort",
+    "BitVecSort", "ArraySort",
     # Expressions
-    "ExprRef", "BoolRef", "ArithRef", "QuantifierRef",
+    "ExprRef", "BoolRef", "ArithRef", "BitVecRef", "ArrayRef",
+    "QuantifierRef",
     # Functions
     "FuncDeclRef", "Function",
     # Variable constructors
     "Int", "Ints", "Nat", "Real", "Reals", "Bool", "Bools",
+    "BitVec", "BitVecs", "Array",
     "Const", "Consts",
     # Value constructors
-    "IntVal", "NatVal", "RealVal", "BoolVal",
+    "IntVal", "NatVal", "RealVal", "BoolVal", "BitVecVal",
+    # Array operations
+    "Select", "Store", "K",
+    # Datatype
+    "Datatype",
     # Operations
     "And", "Or", "Not", "Implies", "Xor", "If", "Distinct",
     # Quantifiers

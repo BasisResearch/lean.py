@@ -277,7 +277,34 @@ prove(Implies(x > 0, x + 1 > 0))
 (e.g. `batteries@v4.29.1` for `leanprover/lean4:v4.29.1`). Supported
 well-known packages: `batteries`, `mathlib`, `aesop`, `proofwidgets`.
 Pass any other name and it will be added as a bare `[[require]]` entry —
-you may need to specify the git source in your own lakefile for those.
+you'll need to specify the git source yourself. For example, to use a
+custom package `MyMathUtils`:
+
+```python
+mp = ManagedProject.get(deps=("batteries", "MyMathUtils"))
+```
+
+This generates a `lakefile.toml` with:
+
+```toml
+[[require]]
+name = "batteries"
+git  = "https://github.com/leanprover-community/batteries"
+rev  = "v4.29.1"
+
+[[require]]
+name = "MyMathUtils"
+```
+
+You'd then edit `~/.lean_py/managed/<hash>/lakefile.toml` to add the
+git source for `MyMathUtils` before the first build:
+
+```toml
+[[require]]
+name = "MyMathUtils"
+git  = "https://github.com/yourorg/my-math-utils"
+rev  = "main"
+```
 
 ## Bidirectional introspection
 

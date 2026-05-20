@@ -63,21 +63,6 @@ unknown = CheckSatResult("unknown")
 
 
 # ---------------------------------------------------------------------------
-# ModelRef (placeholder)
-# ---------------------------------------------------------------------------
-
-
-class ModelRef:
-    """Placeholder -- full model extraction is future work."""
-
-    def __repr__(self) -> str:
-        return "[]"
-
-    def __len__(self) -> int:
-        return 0
-
-
-# ---------------------------------------------------------------------------
 # Kernel management
 # ---------------------------------------------------------------------------
 
@@ -189,9 +174,6 @@ class Solver:
             return unsat
         return unknown
 
-    def model(self) -> ModelRef:
-        return ModelRef()
-
     def assertions(self) -> list[BoolRef]:
         return list(self._assertions)
 
@@ -250,7 +232,6 @@ def simplify(expr: ExprRef) -> str:
 
 __all__ = [
     "CheckSatResult", "sat", "unsat", "unknown",
-    "ModelRef",
     "Solver",
     "set_kernel",
     "prove", "solve", "simplify",

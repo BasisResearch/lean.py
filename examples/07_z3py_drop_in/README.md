@@ -22,17 +22,14 @@ kd.prove(smt.Implies(p,               prove(Implies(p,
 
 ## What you get
 
-Propositional logic, integer/nat/real arithmetic, quantifiers, uninterpreted
-sorts and functions, `Solver` with push/pop — the fragment of z3py that
-knuckledragger uses most. See `prove_with_lean.py` for worked examples:
+Propositional logic, integer/nat/real arithmetic, bit-vectors, arrays,
+algebraic datatypes, quantifiers, uninterpreted sorts and functions,
+`Solver` with push/pop. See `prove_with_lean.py` for worked examples:
 Socrates syllogism, transitivity chains, pigeonhole-style UNSAT, solver
 backtracking.
 
-## What you don't get (yet)
-
-Model extraction (`s.model()`), bit-vectors, arrays, algebraic datatypes.
-Lean is a proof checker — it excels at proving things, not finding models.
-`Solver.check()` returns `unsat` or `unknown`, never `sat`.
+Lean is a proof checker, not an SMT solver. `Solver.check()` returns
+`unsat` or `unknown`, never `sat`. Model extraction is not supported.
 
 ## Run
 

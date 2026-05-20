@@ -11,11 +11,19 @@ import pytest
 from lean_py.kernel import Kernel
 from lean_py.z3 import (
     And,
+    Array,
+    ArraySort,
+    BitVec,
+    BitVecRef,
+    BitVecSort,
+    BitVecVal,
+    BitVecs,
     Bool,
     BoolSort,
     BoolVal,
     Const,
     Consts,
+    Datatype,
     DeclareSort,
     Distinct,
     Exists,
@@ -27,6 +35,7 @@ from lean_py.z3 import (
     IntSort,
     IntVal,
     Ints,
+    K,
     Nat,
     NatSort,
     NatVal,
@@ -34,7 +43,9 @@ from lean_py.z3 import (
     Or,
     Real,
     RealSort,
+    Select,
     Solver,
+    Store,
     Xor,
     sat,
     set_kernel,
@@ -317,3 +328,157 @@ class TestNQueens:
         s = Solver()
         s.add(*constraints)
         assert s.check() == unsat
+
+
+# ------------------------------------------------------------------
+# Bit-vectors
+# ------------------------------------------------------------------
+
+
+class TestBitVec:
+    def test_bitvec_var(self):
+        x = BitVec("x", 8)
+        assert x.to_lean() == "x"
+        assert x.sort() == BitVecSort(8)
+        assert ("x", "(BitVec 8)") in x._vars
+
+    def test_bitvec_val(self):
+        v = BitVecVal(42, 8)
+        assert v.to_lean() == "(42 : BitVec 8)"
+
+    def test_bitvec_arithmetic(self):
+        x, y = BitVecs("x y", 8)
+        assert (x + y).to_lean() == "(x + y)"
+        assert (x - y).to_lean() == "(x - y)"
+        assert (x * y).to_lean() == "(x * y)"
+        assert (-x).to_lean() == "(-x)"
+
+    def test_bitvec_bitwise(self):
+        x, y = BitVecs("x y", 8)
+        assert (x & y).to_lean() == "(x &&& y)"
+        assert (x | y).to_lean() == "(x ||| y)"
+        assert (x ^ y).to_lean() == "(x ^^^ y)"
+        assert (~x).to_lean() == "(~~~x)"
+
+    def test_bitvec_shift(self):
+        x = BitVec("x", 8)
+        assert (x << 2).to_lean() == "(x <<< (2 : BitVec 8))"
+        assert (x >> 1).to_lean() == "(x >>> (1 : BitVec 8))"
+
+    def test_bitvec_comparison(self):
+        x = BitVec("x", 8)
+        assert (x > 5).to_lean() == "(x > (5 : BitVec 8))"
+        assert (x == BitVecVal(0, 8)).to_lean() == "(x = (0 : BitVec 8))"
+
+    def test_bitvec_coercion(self):
+        x = BitVec("x", 8)
+        assert (x + 1).to_lean() == "(x + (1 : BitVec 8))"
+        assert (1 + x).to_lean() == "((1 : BitVec 8) + x)"
+
+    def test_bitvec_or_idempotent(self, kernel):
+        x = BitVec("x", 8)
+        assert _try_prove(_goal_string(ForAll([x], (x | x) == x)))
+
+    def test_bitvec_and_self(self, kernel):
+        x = BitVec("x", 8)
+        assert _try_prove(_goal_string(ForAll([x], (x & x) == x)))
+
+
+# ------------------------------------------------------------------
+# Arrays (SMT theory)
+# ------------------------------------------------------------------
+
+
+class TestArray:
+    def test_array_sort(self):
+        s = ArraySort(IntSort(), IntSort())
+        assert "→" in s.to_lean()
+
+    def test_array_var(self):
+        a = Array("a", IntSort(), IntSort())
+        assert a.to_lean() == "a"
+        assert ("a", "(Int → Int)") in a._vars
+
+    def test_select(self):
+        a = Array("a", IntSort(), IntSort())
+        i = Int("i")
+        sel = Select(a, i)
+        assert sel.to_lean() == "(a i)"
+
+    def test_store(self):
+        a = Array("a", IntSort(), IntSort())
+        i = Int("i")
+        v = Int("v")
+        s = Store(a, i, v)
+        assert "if" in s.to_lean()
+        assert "then" in s.to_lean()
+
+    def test_constant_array(self):
+        c = K(IntSort(), IntVal(0))
+        assert "fun" in c.to_lean()
+        assert "(0 : Int)" in c.to_lean()
+
+    def test_select_store_same_index(self, kernel):
+        """Store then Select at the same index gives the written value."""
+        a = Array("a", IntSort(), IntSort())
+        v = Int("v")
+        written = Store(a, IntVal(3), v)
+        read_back = Select(written, IntVal(3))
+        claim = ForAll([a, v], read_back == v)
+        assert _try_prove(_goal_string(claim))
+
+    def test_constant_array_read(self, kernel):
+        """Reading from a constant array gives the constant value."""
+        i = Int("i")
+        c = K(IntSort(), IntVal(42))
+        claim = ForAll([i], Select(c, i) == IntVal(42))
+        assert _try_prove(_goal_string(claim))
+
+
+# ------------------------------------------------------------------
+# Datatypes
+# ------------------------------------------------------------------
+
+
+class TestDatatype:
+    def test_declare_enum(self):
+        Color = Datatype("Color")
+        Color.declare("red")
+        Color.declare("green")
+        Color.declare("blue")
+        Color = Color.create()
+
+        assert hasattr(Color, "red")
+        assert hasattr(Color, "green")
+        assert hasattr(Color, "blue")
+
+    def test_declare_with_fields(self):
+        Pair = Datatype("Pair")
+        Pair.declare("mk", ("fst", IntSort()), ("snd", IntSort()))
+        Pair = Pair.create()
+
+        assert hasattr(Pair, "mk")
+        assert hasattr(Pair, "fst")
+        assert hasattr(Pair, "snd")
+
+    def test_enum_expression_building(self):
+        """Enum constructors produce well-formed expressions."""
+        Color = Datatype("Color")
+        Color.declare("red")
+        Color.declare("green")
+        Color.declare("blue")
+        Color = Color.create()
+
+        expr = Color.red != Color.green
+        assert "≠" in expr.to_lean()
+        assert "red" in expr.to_lean()
+        assert "green" in expr.to_lean()
+
+    def test_constructor_application(self):
+        Pair = Datatype("Pair")
+        Pair.declare("mk", ("fst", IntSort()), ("snd", IntSort()))
+        Pair = Pair.create()
+
+        x, y = Ints("x y")
+        p = Pair.mk(x, y)
+        assert "(mk x y)" in p.to_lean()
