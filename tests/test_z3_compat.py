@@ -10,9 +10,11 @@ import pytest
 
 from lean_py.kernel import Kernel
 from lean_py.z3 import (
+    Abs,
     And,
     Array,
     ArraySort,
+    BV2Int,
     BitVec,
     BitVecRef,
     BitVecSort,
@@ -21,34 +23,74 @@ from lean_py.z3 import (
     Bool,
     BoolSort,
     BoolVal,
+    Concat,
     Const,
     Consts,
     Datatype,
     DeclareSort,
     Distinct,
     Exists,
+    ExprRef,
+    Extract,
     ForAll,
     Function,
     If,
     Implies,
     Int,
+    Int2BV,
     IntSort,
     IntVal,
     Ints,
     K,
+    LShR,
+    Lambda,
     Nat,
     NatSort,
     NatVal,
     Not,
     Or,
+    Product,
     Real,
     RealSort,
     Select,
+    SignExt,
     Solver,
     Store,
+    Sum,
+    ToInt,
+    ToReal,
+    UDiv,
+    UGE,
+    UGT,
+    ULE,
+    ULT,
+    URem,
     Xor,
+    ZeroExt,
+    is_add,
+    is_and,
+    is_array,
+    is_bool,
+    is_bv,
+    is_const,
+    is_distinct,
+    is_div,
+    is_eq,
+    is_expr,
+    is_false,
+    is_implies,
+    is_int,
+    is_mul,
+    is_not,
+    is_or,
+    is_quantifier,
+    is_real,
+    is_sub,
+    is_true,
+    is_var,
     sat,
     set_kernel,
+    simplify,
     unknown,
     unsat,
 )
@@ -60,17 +102,23 @@ from lean_py.z3._ast import (
     ConstArrayNode,
     DistinctNode,
     ExistsNode,
+    ExtractNode,
     ForAllNode,
     IntASTSort,
     IntLit,
     IteNode,
+    LambdaNode,
     NatLit,
     PropSort,
     SelectNode,
+    SignExtNode,
     StoreNode,
+    ToRealNode,
+    ToIntNode,
     UnOp,
     UnOpNode,
     Var,
+    ZeroExtNode,
 )
 from lean_py.z3.solver import _try_prove
 
@@ -508,3 +556,414 @@ class TestDatatype:
         p = Pair.mk(x, y)
         from lean_py.z3._ast import AppNode
         assert isinstance(p._ast, AppNode)
+
+
+# ------------------------------------------------------------------
+# Bug fixes
+# ------------------------------------------------------------------
+
+
+class TestBugFixes:
+    def test_pow_not_mul(self):
+        """__pow__ should use POW, not MUL."""
+        x = Int("x")
+        p = x ** 2
+        assert isinstance(p._ast, BinOpNode) and p._ast.op == BinOp.POW
+
+    def test_bool_guard(self):
+        """Symbolic expressions should not be castable to bool."""
+        x = Int("x")
+        with pytest.raises(TypeError, match="Symbolic expressions"):
+            bool(x > 0)
+
+    def test_simplify_returns_expr(self):
+        """simplify() should return an ExprRef, not a string."""
+        x = Int("x")
+        result = simplify(x + 1)
+        assert isinstance(result, ExprRef)
+
+    def test_solver_empty_sat(self):
+        """Empty solver should return sat."""
+        s = Solver()
+        assert s.check() == sat
+
+
+# ------------------------------------------------------------------
+# Missing operators
+# ------------------------------------------------------------------
+
+
+class TestMissingOperators:
+    def test_arith_rtruediv(self):
+        x = Int("x")
+        r = 10 / x
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.DIV
+
+    def test_arith_rmod(self):
+        x = Int("x")
+        r = 10 % x
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.MOD
+
+    def test_arith_rpow(self):
+        x = Int("x")
+        r = 2 ** x
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.POW
+
+    def test_arith_pos(self):
+        x = Int("x")
+        assert (+x) is x
+
+    def test_arith_abs(self):
+        x = Int("x")
+        a = abs(x)
+        assert isinstance(a._ast, IteNode)
+
+    def test_arith_is_int(self):
+        x = Int("x")
+        assert x.is_int()
+        assert not x.is_real()
+
+    def test_arith_is_real(self):
+        x = Real("x")
+        assert x.is_real()
+        assert not x.is_int()
+
+    def test_bool_xor_operator(self):
+        a, b = Bool("a"), Bool("b")
+        result = a ^ b
+        assert isinstance(result._ast, BinOpNode) and result._ast.op == BinOp.XOR
+
+    def test_bv_rlshift(self):
+        x = BitVec("x", 8)
+        r = 3 << x
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.BSHL
+
+    def test_bv_rrshift(self):
+        x = BitVec("x", 8)
+        r = 3 >> x
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.BSHR
+
+    def test_bv_size(self):
+        x = BitVec("x", 32)
+        assert x.size() == 32
+
+    def test_bv_div(self):
+        x, y = BitVecs("x y", 8)
+        r = x / y
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.DIV
+
+    def test_bv_mod(self):
+        x, y = BitVecs("x y", 8)
+        r = x % y
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.MOD
+
+    def test_array_getitem(self):
+        a = Array("a", IntSort(), IntSort())
+        i = Int("i")
+        sel = a[i]
+        assert isinstance(sel._ast, SelectNode)
+
+
+# ------------------------------------------------------------------
+# And/Or list support
+# ------------------------------------------------------------------
+
+
+class TestAndOrList:
+    def test_and_list(self):
+        a, b, c = Bool("a"), Bool("b"), Bool("c")
+        result = And([a, b, c])
+        assert isinstance(result._ast, BinOpNode)
+
+    def test_or_list(self):
+        a, b = Bool("a"), Bool("b")
+        result = Or([a, b])
+        assert isinstance(result._ast, BinOpNode) and result._ast.op == BinOp.OR
+
+    def test_and_empty_list(self):
+        result = And([])
+        assert isinstance(result._ast, BoolLit) and result._ast.val is True
+
+    def test_or_empty_list(self):
+        result = Or([])
+        assert isinstance(result._ast, BoolLit) and result._ast.val is False
+
+
+# ------------------------------------------------------------------
+# Bitvector functions
+# ------------------------------------------------------------------
+
+
+class TestBitvecFunctions:
+    def test_lshr(self):
+        x = BitVec("x", 8)
+        r = LShR(x, 2)
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.BSHR
+
+    def test_ule(self):
+        x, y = BitVecs("x y", 8)
+        r = ULE(x, y)
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.LE
+
+    def test_ult(self):
+        x, y = BitVecs("x y", 8)
+        r = ULT(x, y)
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.LT
+
+    def test_uge(self):
+        x, y = BitVecs("x y", 8)
+        r = UGE(x, y)
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.GE
+
+    def test_ugt(self):
+        x, y = BitVecs("x y", 8)
+        r = UGT(x, y)
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.GT
+
+    def test_udiv(self):
+        x, y = BitVecs("x y", 8)
+        r = UDiv(x, y)
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.DIV
+
+    def test_urem(self):
+        x, y = BitVecs("x y", 8)
+        r = URem(x, y)
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.MOD
+
+    def test_extract(self):
+        x = BitVec("x", 8)
+        r = Extract(3, 0, x)
+        assert isinstance(r._ast, ExtractNode)
+        assert r._ast.hi == 3 and r._ast.lo == 0
+        assert r.size() == 4
+
+    def test_concat(self):
+        a = BitVec("a", 4)
+        b = BitVec("b", 4)
+        r = Concat(a, b)
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.CONCAT
+        assert r.size() == 8
+
+    def test_zeroext(self):
+        x = BitVec("x", 8)
+        r = ZeroExt(8, x)
+        assert isinstance(r._ast, ZeroExtNode)
+        assert r.size() == 16
+
+    def test_signext(self):
+        x = BitVec("x", 8)
+        r = SignExt(8, x)
+        assert isinstance(r._ast, SignExtNode)
+        assert r.size() == 16
+
+    def test_bv2int(self):
+        x = BitVec("x", 8)
+        r = BV2Int(x)
+        assert isinstance(r._ast, UnOpNode) and r._ast.op == UnOp.BV2INT
+        assert r.sort() == IntSort()
+
+    def test_int2bv(self):
+        x = Int("x")
+        r = Int2BV(x, 8)
+        assert r.size() == 8
+
+
+# ------------------------------------------------------------------
+# Arithmetic functions
+# ------------------------------------------------------------------
+
+
+class TestArithFunctions:
+    def test_abs_function(self):
+        x = Int("x")
+        r = Abs(x)
+        assert isinstance(r._ast, IteNode)
+
+    def test_toreal(self):
+        x = Int("x")
+        r = ToReal(x)
+        assert isinstance(r._ast, ToRealNode)
+        assert r.sort() == RealSort()
+
+    def test_toint(self):
+        x = Real("x")
+        r = ToInt(x)
+        assert isinstance(r._ast, ToIntNode)
+        assert r.sort() == IntSort()
+
+    def test_sum(self):
+        x, y, z = Ints("x y z")
+        r = Sum(x, y, z)
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.ADD
+
+    def test_sum_list(self):
+        x, y = Ints("x y")
+        r = Sum([x, y])
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.ADD
+
+    def test_sum_empty(self):
+        r = Sum()
+        assert isinstance(r._ast, IntLit) and r._ast.val == 0
+
+    def test_product(self):
+        x, y = Ints("x y")
+        r = Product(x, y)
+        assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.MUL
+
+    def test_product_empty(self):
+        r = Product()
+        assert isinstance(r._ast, IntLit) and r._ast.val == 1
+
+
+# ------------------------------------------------------------------
+# Predicates
+# ------------------------------------------------------------------
+
+
+class TestPredicates:
+    def test_is_expr(self):
+        assert is_expr(Int("x"))
+        assert not is_expr(42)
+
+    def test_is_true_false(self):
+        assert is_true(BoolVal(True))
+        assert is_false(BoolVal(False))
+        assert not is_true(BoolVal(False))
+        assert not is_false(BoolVal(True))
+
+    def test_is_int(self):
+        assert is_int(Int("x"))
+        assert not is_int(Real("x"))
+
+    def test_is_real(self):
+        assert is_real(Real("x"))
+        assert not is_real(Int("x"))
+
+    def test_is_bool(self):
+        assert is_bool(Bool("a"))
+        assert not is_bool(Int("x"))
+
+    def test_is_bv(self):
+        assert is_bv(BitVec("x", 8))
+        assert not is_bv(Int("x"))
+
+    def test_is_array(self):
+        a = Array("a", IntSort(), IntSort())
+        assert is_array(a)
+        assert not is_array(Int("x"))
+
+    def test_is_const_var(self):
+        assert is_const(Int("x"))
+        assert is_var(Int("x"))
+        x, y = Ints("x y")
+        assert not is_const(x + y)
+
+    def test_is_quantifier(self):
+        x = Int("x")
+        assert is_quantifier(ForAll([x], x > 0))
+        assert not is_quantifier(x > 0)
+
+    def test_is_eq(self):
+        x, y = Ints("x y")
+        assert is_eq(x == y)
+        assert not is_eq(x > y)
+
+    def test_is_distinct(self):
+        x, y = Ints("x y")
+        assert is_distinct(Distinct(x, y))
+
+    def test_is_and_or_not(self):
+        a, b = Bool("a"), Bool("b")
+        assert is_and(And(a, b))
+        assert is_or(Or(a, b))
+        assert is_not(Not(a))
+
+    def test_is_implies(self):
+        a, b = Bool("a"), Bool("b")
+        assert is_implies(Implies(a, b))
+
+    def test_is_arithmetic_ops(self):
+        x, y = Ints("x y")
+        assert is_add(x + y)
+        assert is_mul(x * y)
+        assert is_sub(x - y)
+        assert is_div(x / y)
+
+
+# ------------------------------------------------------------------
+# Lambda
+# ------------------------------------------------------------------
+
+
+class TestLambda:
+    def test_lambda_single_var(self):
+        x = Int("x")
+        lam = Lambda(x, x + 1)
+        assert isinstance(lam._ast, LambdaNode)
+        assert lam._ast.name == "x"
+
+    def test_lambda_multi_var(self):
+        x, y = Ints("x y")
+        lam = Lambda([x, y], x + y)
+        assert isinstance(lam._ast, LambdaNode)
+        # Nested: outer is x, inner is y
+        assert lam._ast.name == "x"
+        assert isinstance(lam._ast.body, LambdaNode)
+        assert lam._ast.body.name == "y"
+
+    def test_lambda_free_vars(self):
+        x, y = Ints("x y")
+        lam = Lambda(x, x + y)
+        # x is bound, y is free
+        names = {n for n, _ in lam._vars}
+        assert "x" not in names
+        assert "y" in names
+
+
+# ------------------------------------------------------------------
+# New feature proofs (require kernel)
+# ------------------------------------------------------------------
+
+
+class TestNewFeatureProofs:
+    def test_pow_proof(self, kernel):
+        """x^1 is not provable as x via grind generally, but 2^3 = 8 is."""
+        # Concrete: 2^3 = 8
+        claim = IntVal(2) ** 3 == IntVal(8)
+        assert _try_prove(claim)
+
+    def test_abs_nonneg(self, kernel):
+        """abs(x) >= 0 for all x."""
+        x = Int("x")
+        a = Abs(x)
+        claim = ForAll([x], a >= 0)
+        assert _try_prove(claim)
+
+    def test_empty_solver_sat(self, kernel):
+        """Empty solver returns sat."""
+        s = Solver()
+        assert s.check() == sat
+
+    def test_bv_concat_size(self, kernel):
+        """Concat preserves correct width (4+4=8)."""
+        a = BitVec("a", 4)
+        b = BitVec("b", 4)
+        c = Concat(a, b)
+        assert c.size() == 8
+
+    def test_sum_proof(self, kernel):
+        """Sum(x, y) == x + y."""
+        x, y = Ints("x y")
+        claim = ForAll([x, y], Sum(x, y) == x + y)
+        assert _try_prove(claim)
+
+    def test_product_proof(self, kernel):
+        """Product(x, y) == x * y."""
+        x, y = Ints("x y")
+        claim = ForAll([x, y], Product(x, y) == x * y)
+        assert _try_prove(claim)
+
+    def test_lshr_same_as_rshift(self, kernel):
+        """LShR(x, n) produces same AST as x >> n."""
+        x = BitVec("x", 8)
+        assert LShR(x, 2)._ast == (x >> 2)._ast

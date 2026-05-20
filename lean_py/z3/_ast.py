@@ -87,12 +87,15 @@ class BinOp:
     BXOR = "bxor"
     BSHL = "bshl"
     BSHR = "bshr"
+    POW = "pow"
+    CONCAT = "concat"
 
 
 class UnOp:
     NEG = "neg"
     NOT = "not"
     BNOT = "bnot"
+    BV2INT = "bv2int"
 
 
 # ---------------------------------------------------------------------------
@@ -190,11 +193,55 @@ class ConstArrayNode:
     val: ASTNode
 
 
+@dataclass(frozen=True)
+class ExtractNode:
+    hi: int
+    lo: int
+    arg: ASTNode
+
+
+@dataclass(frozen=True)
+class ZeroExtNode:
+    bits: int
+    arg: ASTNode
+
+
+@dataclass(frozen=True)
+class SignExtNode:
+    bits: int
+    arg: ASTNode
+
+
+@dataclass(frozen=True)
+class Int2BvNode:
+    width: int
+    arg: ASTNode
+
+
+@dataclass(frozen=True)
+class ToRealNode:
+    arg: ASTNode
+
+
+@dataclass(frozen=True)
+class ToIntNode:
+    arg: ASTNode
+
+
+@dataclass(frozen=True)
+class LambdaNode:
+    name: str
+    sort: ASTSort
+    body: ASTNode
+
+
 ASTNode = Union[
     Var, IntLit, NatLit, BoolLit, BvLit,
     BinOpNode, UnOpNode, IteNode,
     ForAllNode, ExistsNode, AppNode,
     DistinctNode, SelectNode, StoreNode, ConstArrayNode,
+    ExtractNode, ZeroExtNode, SignExtNode, Int2BvNode,
+    ToRealNode, ToIntNode, LambdaNode,
 ]
 
 __all__ = [
@@ -208,5 +255,7 @@ __all__ = [
     "BinOpNode", "UnOpNode", "IteNode",
     "ForAllNode", "ExistsNode", "AppNode",
     "DistinctNode", "SelectNode", "StoreNode", "ConstArrayNode",
+    "ExtractNode", "ZeroExtNode", "SignExtNode", "Int2BvNode",
+    "ToRealNode", "ToIntNode", "LambdaNode",
     "ASTNode",
 ]

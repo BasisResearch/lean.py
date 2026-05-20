@@ -27,21 +27,28 @@ from lean_py.z3._ast import (
     ConstArrayNode,
     DistinctNode,
     ExistsNode,
+    ExtractNode,
     ForAllNode,
+    Int2BvNode,
     IntASTSort,
     IntLit,
     IteNode,
+    LambdaNode,
     NatASTSort,
     NatLit,
     PropSort,
     RealASTSort,
     SelectNode,
+    SignExtNode,
     StoreNode,
+    ToIntNode,
+    ToRealNode,
     UnOp,
     TypeASTSort,
     UnOpNode,
     UninterpASTSort,
     Var,
+    ZeroExtNode,
 )
 
 # ---------------------------------------------------------------------------
@@ -188,6 +195,11 @@ class ExprRef:
     def __hash__(self) -> int:
         return hash(self._ast)
 
+    def __bool__(self) -> bool:
+        raise TypeError(
+            "Symbolic expressions cannot be cast to concrete Boolean values"
+        )
+
 
 class BoolRef(ExprRef):
     """Boolean / Prop expression."""
@@ -209,6 +221,9 @@ class BoolRef(ExprRef):
 
     def __invert__(self) -> BoolRef:
         return Not(self)
+
+    def __xor__(self, other: BoolRef) -> BoolRef:
+        return Xor(self, other)
 
 
 class ArithRef(ExprRef):
@@ -256,8 +271,39 @@ class ArithRef(ExprRef):
     def __mod__(self, other: ArithRef | int | float) -> ArithRef:
         return self._binop(BinOp.MOD, other)
 
+    def __rtruediv__(self, other: int | float) -> ArithRef:
+        return _coerce_arith(other, self._sort)._binop(BinOp.DIV, self)
+
+    def __rmod__(self, other: int | float) -> ArithRef:
+        return _coerce_arith(other, self._sort)._binop(BinOp.MOD, self)
+
     def __pow__(self, other: ArithRef | int | float) -> ArithRef:
-        return self._binop(BinOp.MUL, other)  # placeholder
+        return self._binop(BinOp.POW, other)
+
+    def __rpow__(self, other: int | float) -> ArithRef:
+        return _coerce_arith(other, self._sort)._binop(BinOp.POW, self)
+
+    def __pos__(self) -> ArithRef:
+        return self
+
+    def __abs__(self) -> ArithRef:
+        zero = _coerce_arith(0, self._sort)
+        cond = BoolRef(
+            BinOpNode(BinOp.GE, self._ast, zero._ast),
+            self._vars,
+        )
+        neg = ArithRef(UnOpNode(UnOp.NEG, self._ast), self._sort, self._vars)  # type: ignore[arg-type]
+        return ArithRef(
+            IteNode(cond._ast, self._ast, neg._ast),
+            self._sort,  # type: ignore[arg-type]
+            self._vars,
+        )
+
+    def is_int(self) -> bool:
+        return isinstance(self._sort._ast_sort, IntASTSort)
+
+    def is_real(self) -> bool:
+        return isinstance(self._sort._ast_sort, RealASTSort)
 
     def __neg__(self) -> ArithRef:
         return ArithRef(
@@ -374,6 +420,24 @@ class BitVecRef(ExprRef):
     def __rshift__(self, other: BitVecRef | int) -> BitVecRef:
         return self._binop(BinOp.BSHR, other)
 
+    def __rlshift__(self, other: int) -> BitVecRef:
+        return _coerce_bv(other, self._sort)._binop(BinOp.BSHL, self)
+
+    def __rrshift__(self, other: int) -> BitVecRef:
+        return _coerce_bv(other, self._sort)._binop(BinOp.BSHR, self)
+
+    def __truediv__(self, other: BitVecRef | int) -> BitVecRef:
+        return self._binop(BinOp.DIV, other)
+
+    def __mod__(self, other: BitVecRef | int) -> BitVecRef:
+        return self._binop(BinOp.MOD, other)
+
+    def size(self) -> int:
+        sort = self._sort
+        if isinstance(sort, BitVecSortRef):
+            return sort._width
+        raise TypeError("size() requires BitVecSortRef")
+
     # Comparisons
     def __lt__(self, other: BitVecRef | int) -> BoolRef:
         other = _coerce_bv(other, self._sort)
@@ -416,6 +480,9 @@ class ArrayRef(ExprRef):
         vars: frozenset[tuple[str, ASTSort]] = frozenset(),
     ) -> None:
         super().__init__(ast, sort, vars)
+
+    def __getitem__(self, idx: ExprRef) -> ExprRef:
+        return Select(self, idx)
 
 
 class QuantifierRef(BoolRef):
@@ -687,6 +754,8 @@ def Datatype(name: str) -> _DatatypeBuilder:
 
 
 def And(*args: BoolRef) -> BoolRef:
+    if len(args) == 1 and isinstance(args[0], list):
+        args = tuple(args[0])
     if len(args) == 0:
         return BoolVal(True)
     if len(args) == 1:
@@ -700,6 +769,8 @@ def And(*args: BoolRef) -> BoolRef:
 
 
 def Or(*args: BoolRef) -> BoolRef:
+    if len(args) == 1 and isinstance(args[0], list):
+        args = tuple(args[0])
     if len(args) == 0:
         return BoolVal(False)
     if len(args) == 1:
@@ -822,6 +893,293 @@ def _sort_repr(s: ASTSort) -> str:
     return str(s)
 
 
+# ---------------------------------------------------------------------------
+# Bitvector functions
+# ---------------------------------------------------------------------------
+
+
+def LShR(a: BitVecRef, b: BitVecRef | int) -> BitVecRef:
+    """Logical shift right (same as >> for Lean BitVec, which is unsigned)."""
+    return a._binop(BinOp.BSHR, b)
+
+
+def ULE(a: BitVecRef, b: BitVecRef | int) -> BoolRef:
+    """Unsigned less-than-or-equal (Lean BitVec cmp is unsigned)."""
+    return a <= b
+
+
+def ULT(a: BitVecRef, b: BitVecRef | int) -> BoolRef:
+    """Unsigned less-than (Lean BitVec cmp is unsigned)."""
+    return a < b
+
+
+def UGE(a: BitVecRef, b: BitVecRef | int) -> BoolRef:
+    """Unsigned greater-than-or-equal (Lean BitVec cmp is unsigned)."""
+    return a >= b
+
+
+def UGT(a: BitVecRef, b: BitVecRef | int) -> BoolRef:
+    """Unsigned greater-than (Lean BitVec cmp is unsigned)."""
+    return a > b
+
+
+def UDiv(a: BitVecRef, b: BitVecRef | int) -> BitVecRef:
+    """Unsigned division (Lean BitVec div is unsigned)."""
+    return a._binop(BinOp.DIV, b)
+
+
+def URem(a: BitVecRef, b: BitVecRef | int) -> BitVecRef:
+    """Unsigned remainder (Lean BitVec mod is unsigned)."""
+    return a._binop(BinOp.MOD, b)
+
+
+def Extract(hi: int, lo: int, x: BitVecRef) -> BitVecRef:
+    """Extract bits [hi:lo] from a bit-vector."""
+    width = hi - lo + 1
+    return BitVecRef(
+        ExtractNode(hi, lo, x._ast),
+        BitVecSort(width),
+        x._vars,
+    )
+
+
+def Concat(a: BitVecRef, b: BitVecRef) -> BitVecRef:
+    """Concatenate two bit-vectors."""
+    a_sort = a._sort
+    b_sort = b._sort
+    if not isinstance(a_sort, BitVecSortRef) or not isinstance(b_sort, BitVecSortRef):
+        raise TypeError("Concat requires BitVecRef arguments")
+    width = a_sort._width + b_sort._width
+    return BitVecRef(
+        BinOpNode(BinOp.CONCAT, a._ast, b._ast),
+        BitVecSort(width),
+        _merge(a._vars, b._vars),
+    )
+
+
+def ZeroExt(n: int, x: BitVecRef) -> BitVecRef:
+    """Zero-extend a bit-vector by n bits."""
+    sort = x._sort
+    if not isinstance(sort, BitVecSortRef):
+        raise TypeError("ZeroExt requires BitVecRef")
+    new_width = sort._width + n
+    return BitVecRef(
+        ZeroExtNode(new_width, x._ast),
+        BitVecSort(new_width),
+        x._vars,
+    )
+
+
+def SignExt(n: int, x: BitVecRef) -> BitVecRef:
+    """Sign-extend a bit-vector by n bits."""
+    sort = x._sort
+    if not isinstance(sort, BitVecSortRef):
+        raise TypeError("SignExt requires BitVecRef")
+    new_width = sort._width + n
+    return BitVecRef(
+        SignExtNode(new_width, x._ast),
+        BitVecSort(new_width),
+        x._vars,
+    )
+
+
+def BV2Int(x: BitVecRef) -> ArithRef:
+    """Convert a bit-vector to an integer."""
+    return ArithRef(
+        UnOpNode(UnOp.BV2INT, x._ast),
+        IntSort(),
+        x._vars,
+    )
+
+
+def Int2BV(x: ArithRef, n: int) -> BitVecRef:
+    """Convert an integer to a bit-vector of width n."""
+    return BitVecRef(
+        Int2BvNode(n, x._ast),
+        BitVecSort(n),
+        x._vars,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Arithmetic functions
+# ---------------------------------------------------------------------------
+
+
+def Abs(x: ArithRef) -> ArithRef:
+    """Absolute value via ITE."""
+    return abs(x)
+
+
+def ToReal(x: ArithRef) -> ArithRef:
+    """Convert Int to Real."""
+    return ArithRef(
+        ToRealNode(x._ast),
+        RealSort(),
+        x._vars,
+    )
+
+
+def ToInt(x: ArithRef) -> ArithRef:
+    """Convert Real to Int (floor)."""
+    return ArithRef(
+        ToIntNode(x._ast),
+        IntSort(),
+        x._vars,
+    )
+
+
+def Sum(*args: ArithRef) -> ArithRef:
+    """Left-fold sum."""
+    flat: list[ArithRef] = []
+    for a in args:
+        if isinstance(a, (list, tuple)):
+            flat.extend(a)
+        else:
+            flat.append(a)
+    if not flat:
+        return IntVal(0)
+    result = flat[0]
+    for a in flat[1:]:
+        result = result + a
+    return result
+
+
+def Product(*args: ArithRef) -> ArithRef:
+    """Left-fold product."""
+    flat: list[ArithRef] = []
+    for a in args:
+        if isinstance(a, (list, tuple)):
+            flat.extend(a)
+        else:
+            flat.append(a)
+    if not flat:
+        return IntVal(1)
+    result = flat[0]
+    for a in flat[1:]:
+        result = result * a
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Lambda
+# ---------------------------------------------------------------------------
+
+
+def Lambda(vars: ExprRef | Sequence[ExprRef], body: ExprRef) -> ExprRef:
+    """Build a lambda expression (maps to Lean lambda)."""
+    vs = [vars] if isinstance(vars, ExprRef) else list(vars)
+    bound_names = frozenset(
+        (v._ast.name, v._sort._ast_sort) for v in vs if isinstance(v._ast, Var)
+    )
+    free = body._vars - bound_names
+    for v in vs:
+        free = free | v._vars - bound_names
+
+    ast: ASTNode = body._ast
+    for v in reversed(vs):
+        ast = LambdaNode(
+            name=v._ast.name if isinstance(v._ast, Var) else str(v._ast),
+            sort=v._sort._ast_sort,
+            body=ast,
+        )
+    return ExprRef(ast, body._sort, free)
+
+
+# ---------------------------------------------------------------------------
+# Predicate functions
+# ---------------------------------------------------------------------------
+
+
+def is_expr(a: object) -> bool:
+    return isinstance(a, ExprRef)
+
+
+def is_true(a: ExprRef) -> bool:
+    return isinstance(a._ast, BoolLit) and a._ast.val is True
+
+
+def is_false(a: ExprRef) -> bool:
+    return isinstance(a._ast, BoolLit) and a._ast.val is False
+
+
+def is_int(a: ExprRef) -> bool:
+    return isinstance(a._sort._ast_sort, IntASTSort)
+
+
+def is_real(a: ExprRef) -> bool:
+    return isinstance(a._sort._ast_sort, RealASTSort)
+
+
+def is_bool(a: ExprRef) -> bool:
+    return isinstance(a, BoolRef)
+
+
+def is_bv(a: ExprRef) -> bool:
+    return isinstance(a, BitVecRef)
+
+
+def is_array(a: ExprRef) -> bool:
+    return isinstance(a, ArrayRef)
+
+
+def is_const(a: ExprRef) -> bool:
+    return isinstance(a._ast, Var)
+
+
+def is_var(a: ExprRef) -> bool:
+    return isinstance(a._ast, Var)
+
+
+def is_quantifier(a: ExprRef) -> bool:
+    return isinstance(a._ast, (ForAllNode, ExistsNode))
+
+
+def is_eq(a: ExprRef) -> bool:
+    return isinstance(a._ast, BinOpNode) and a._ast.op == BinOp.EQ
+
+
+def is_distinct(a: ExprRef) -> bool:
+    return isinstance(a._ast, DistinctNode)
+
+
+def is_and(a: ExprRef) -> bool:
+    return isinstance(a._ast, BinOpNode) and a._ast.op == BinOp.AND
+
+
+def is_or(a: ExprRef) -> bool:
+    return isinstance(a._ast, BinOpNode) and a._ast.op == BinOp.OR
+
+
+def is_not(a: ExprRef) -> bool:
+    return isinstance(a._ast, UnOpNode) and a._ast.op == UnOp.NOT
+
+
+def is_implies(a: ExprRef) -> bool:
+    return isinstance(a._ast, BinOpNode) and a._ast.op == BinOp.IMPLIES
+
+
+def is_add(a: ExprRef) -> bool:
+    return isinstance(a._ast, BinOpNode) and a._ast.op == BinOp.ADD
+
+
+def is_mul(a: ExprRef) -> bool:
+    return isinstance(a._ast, BinOpNode) and a._ast.op == BinOp.MUL
+
+
+def is_sub(a: ExprRef) -> bool:
+    return isinstance(a._ast, BinOpNode) and a._ast.op == BinOp.SUB
+
+
+def is_div(a: ExprRef) -> bool:
+    return isinstance(a._ast, BinOpNode) and a._ast.op == BinOp.DIV
+
+
+# ---------------------------------------------------------------------------
+# Repr helpers
+# ---------------------------------------------------------------------------
+
+
 def _ast_repr(node: ASTNode) -> str:
     """Human-readable string for an ASTNode (for debugging)."""
     if isinstance(node, Var):
@@ -856,6 +1214,20 @@ def _ast_repr(node: ASTNode) -> str:
         return f"(store {_ast_repr(node.arr)} {_ast_repr(node.idx)} {_ast_repr(node.val)})"
     if isinstance(node, ConstArrayNode):
         return f"(const-array {_ast_repr(node.val)})"
+    if isinstance(node, ExtractNode):
+        return f"(extract {node.hi} {node.lo} {_ast_repr(node.arg)})"
+    if isinstance(node, ZeroExtNode):
+        return f"(zero-ext {node.bits} {_ast_repr(node.arg)})"
+    if isinstance(node, SignExtNode):
+        return f"(sign-ext {node.bits} {_ast_repr(node.arg)})"
+    if isinstance(node, Int2BvNode):
+        return f"(int2bv {node.width} {_ast_repr(node.arg)})"
+    if isinstance(node, ToRealNode):
+        return f"(to-real {_ast_repr(node.arg)})"
+    if isinstance(node, ToIntNode):
+        return f"(to-int {_ast_repr(node.arg)})"
+    if isinstance(node, LambdaNode):
+        return f"(λ {node.name}, {_ast_repr(node.body)})"
     return str(node)
 
 
@@ -888,4 +1260,16 @@ __all__ = [
     "And", "Or", "Not", "Implies", "Xor", "If", "Distinct",
     # Quantifiers
     "ForAll", "Exists",
+    # Bitvector functions
+    "LShR", "ULE", "ULT", "UGE", "UGT", "UDiv", "URem",
+    "Extract", "Concat", "ZeroExt", "SignExt", "BV2Int", "Int2BV",
+    # Arithmetic functions
+    "Abs", "ToReal", "ToInt", "Sum", "Product",
+    # Lambda
+    "Lambda",
+    # Predicates
+    "is_expr", "is_true", "is_false", "is_int", "is_real",
+    "is_bool", "is_bv", "is_array", "is_const", "is_var",
+    "is_quantifier", "is_eq", "is_distinct", "is_and", "is_or",
+    "is_not", "is_implies", "is_add", "is_mul", "is_sub", "is_div",
 ]

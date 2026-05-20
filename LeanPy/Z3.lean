@@ -28,10 +28,11 @@ inductive Z3BinOp where
   | lt | le | gt | ge | eq | ne
   | and | or | implies | xor
   | band | bor | bxor | bshl | bshr
+  | pow | concat
   deriving Inhabited
 
 inductive Z3UnOp where
-  | neg | not | bnot
+  | neg | not | bnot | bv2int
   deriving Inhabited
 
 inductive Z3Expr where
@@ -50,6 +51,13 @@ inductive Z3Expr where
   | select (arr idx : Z3Expr)
   | store (arr idx val : Z3Expr)
   | constArray (domSort : Z3Sort) (val : Z3Expr)
+  | lambda_ (name : String) (sort : Z3Sort) (body : Z3Expr)
+  | extract (hi lo : Nat) (arg : Z3Expr)
+  | zeroExt (bits : Nat) (arg : Z3Expr)
+  | signExt (bits : Nat) (arg : Z3Expr)
+  | int2bv (width : Nat) (arg : Z3Expr)
+  | toReal (arg : Z3Expr)
+  | toInt (arg : Z3Expr)
   deriving Inhabited
 
 derive_python LeanPy.Z3.Z3Sort
@@ -125,12 +133,21 @@ partial def compileExpr (varMap : Std.HashMap String Lean.Expr) : Z3Expr → Met
     | .bxor    => Meta.mkAppM ``HXor.hXor #[a, b]
     | .bshl    => Meta.mkAppM ``HShiftLeft.hShiftLeft #[a, b]
     | .bshr    => Meta.mkAppM ``HShiftRight.hShiftRight #[a, b]
+    | .pow     => do
+      -- HPow requires Nat exponent for Int/Nat; coerce if needed
+      let bTy ← Meta.inferType b
+      let natTy := mkConst ``Nat
+      let b' ← if (← Meta.isDefEq bTy natTy) then pure b
+                else Meta.mkAppM ``Int.toNat #[b]
+      Meta.mkAppM ``HPow.hPow #[a, b']
+    | .concat  => Meta.mkAppM ``HAppend.hAppend #[a, b]
   | .unop op arg => do
     let a ← compileExpr varMap arg
     match op with
     | .neg  => Meta.mkAppM ``Neg.neg #[a]
     | .not  => Meta.mkAppM ``Not #[a]
     | .bnot => Meta.mkAppM ``Complement.complement #[a]
+    | .bv2int => Meta.mkAppM ``BitVec.toInt #[a]
   | .ite cond then_ else_ => do
     let c ← compileExpr varMap cond
     let t ← compileExpr varMap then_
@@ -197,6 +214,40 @@ partial def compileExpr (varMap : Std.HashMap String Lean.Expr) : Z3Expr → Met
     let v ← compileExpr varMap val
     Meta.withLocalDecl `_ .default domExpr fun xvar => do
       Meta.mkLambdaFVars #[xvar] v
+  | .lambda_ name sort body => do
+    let sortExpr ← compileSort varMap sort
+    Meta.withLocalDecl name.toName .default sortExpr fun fvar => do
+      let varMap' := varMap.insert name fvar
+      let bodyExpr ← compileExpr varMap' body
+      Meta.mkLambdaFVars #[fvar] bodyExpr
+  | .extract hi lo arg => do
+    let a ← compileExpr varMap arg
+    let hiLit := mkNatLit hi
+    let loLit := mkNatLit lo
+    Meta.mkAppM ``BitVec.extractLsb #[hiLit, loLit, a]
+  | .zeroExt bits arg => do
+    let a ← compileExpr varMap arg
+    let bitsLit := mkNatLit bits
+    Meta.mkAppM ``BitVec.zeroExtend #[bitsLit, a]
+  | .signExt bits arg => do
+    let a ← compileExpr varMap arg
+    let bitsLit := mkNatLit bits
+    Meta.mkAppM ``BitVec.signExtend #[bitsLit, a]
+  | .int2bv width arg => do
+    let a ← compileExpr varMap arg
+    let widthLit := mkNatLit width
+    Meta.mkAppOptM ``BitVec.ofInt #[some widthLit, some a]
+  | .toReal arg => do
+    let a ← compileExpr varMap arg
+    -- Int.cast is in core Lean; needs IntCast instance on target type (e.g. Real from Mathlib)
+    Meta.mkAppM ``Int.cast #[a]
+  | .toInt arg => do
+    let a ← compileExpr varMap arg
+    -- Int.floor requires Mathlib's FloorRing; will error if not available
+    try
+      Meta.mkAppM `Int.floor #[a]
+    catch _ =>
+      throwError "toInt compilation requires `Int.floor` (available with Mathlib)"
 
 /-! ## Top-level @[python] functions -/
 

@@ -33,21 +33,28 @@ from lean_py.z3._ast import (
     ConstArrayNode,
     DistinctNode,
     ExistsNode,
+    ExtractNode,
     ForAllNode,
+    Int2BvNode,
     IntASTSort,
     IntLit,
     IteNode,
+    LambdaNode,
     NatASTSort,
     NatLit,
     PropSort,
     RealASTSort,
     SelectNode,
+    SignExtNode,
     StoreNode,
+    ToIntNode,
+    ToRealNode,
     UnOp,
     UnOpNode,
     TypeASTSort,
     UninterpASTSort,
     Var,
+    ZeroExtNode,
 )
 from lean_py.z3.core import (
     And,
@@ -212,6 +219,28 @@ def _marshal_expr(lib: Any, node: ASTNode) -> Any:
         dom_sort = _marshal_sort(lib, node.dom_sort)
         val = _marshal_expr(lib, node.val)
         return Z3Expr.constArray(dom_sort, val)
+    if isinstance(node, ExtractNode):
+        arg = _marshal_expr(lib, node.arg)
+        return Z3Expr.extract(node.hi, node.lo, arg)
+    if isinstance(node, ZeroExtNode):
+        arg = _marshal_expr(lib, node.arg)
+        return Z3Expr.zeroExt(node.bits, arg)
+    if isinstance(node, SignExtNode):
+        arg = _marshal_expr(lib, node.arg)
+        return Z3Expr.signExt(node.bits, arg)
+    if isinstance(node, Int2BvNode):
+        arg = _marshal_expr(lib, node.arg)
+        return Z3Expr.int2bv(node.width, arg)
+    if isinstance(node, ToRealNode):
+        arg = _marshal_expr(lib, node.arg)
+        return Z3Expr.toReal(arg)
+    if isinstance(node, ToIntNode):
+        arg = _marshal_expr(lib, node.arg)
+        return Z3Expr.toInt(arg)
+    if isinstance(node, LambdaNode):
+        sort = _marshal_sort(lib, node.sort)
+        body = _marshal_expr(lib, node.body)
+        return Z3Expr.lambda_(node.name, sort, body)
     raise TypeError(f"Unknown ASTNode: {type(node)}")
 
 
@@ -311,7 +340,7 @@ class Solver:
 
     def check(self) -> CheckSatResult:
         if not self._assertions:
-            return unknown
+            return sat
         conj = And(*self._assertions)
         negated = Not(conj)
         if _try_prove(negated):
@@ -362,11 +391,9 @@ def solve(*args: BoolRef) -> CheckSatResult:
     return s.check()
 
 
-def simplify(expr: ExprRef) -> str:
-    """Reduce an expression via Lean's ``whnf``."""
-    k = _get_kernel()
-    # For simplify, fall back to string-based approach since it's just whnf
-    return k.whnf(repr(expr))
+def simplify(expr: ExprRef) -> ExprRef:
+    """Simplify an expression (placeholder — returns input unchanged)."""
+    return expr
 
 
 # ---------------------------------------------------------------------------
