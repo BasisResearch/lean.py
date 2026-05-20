@@ -279,21 +279,6 @@ well-known packages: `batteries`, `mathlib`, `aesop`, `proofwidgets`.
 Pass any other name and it will be added as a bare `[[require]]` entry —
 you may need to specify the git source in your own lakefile for those.
 
-### What works today
-
-| z3py | lean_py.z3 |
-|------|-----------|
-| `Int`, `Nat`, `Real`, `Bool` variables | Yes |
-| Arithmetic operators (`+`, `-`, `*`, `/`, `%`, `**`) | Yes |
-| Comparisons (`<`, `<=`, `>`, `>=`, `==`, `!=`) | Yes |
-| `And`, `Or`, `Not`, `Implies`, `Xor`, `Distinct` | Yes |
-| `ForAll`, `Exists` | Yes |
-| `DeclareSort`, `Function` (uninterpreted) | Yes |
-| `Solver` with `push`/`pop`, context manager | Yes |
-| `prove(claim)` convenience | Yes |
-| Model extraction (`s.model()`) | Placeholder only |
-| Bit-vectors, arrays, datatypes | Not yet |
-
 ## Bidirectional introspection
 
 Lean's kernel ADTs (`Lean.Expr`, `Lean.Name`, `Lean.Level`,
