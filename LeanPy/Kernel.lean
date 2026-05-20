@@ -62,7 +62,7 @@ def clearEnv (_ : Unit) : IO Unit :=
 
 /-- Build a `Core.Context` matching pantograph's defaults plus a fresh
 `initHeartbeats` for timeout accounting. -/
-private def freshCoreContext : IO Core.Context := do
+def freshCoreContext : IO Core.Context := do
   return {
     fileName       := "<lean_py.kernel>"
     fileMap        := { source := "", positions := #[0] }

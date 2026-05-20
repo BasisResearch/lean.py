@@ -1,9 +1,9 @@
-"""z3py-compatible expression AST backed by Lean syntax strings.
+"""z3py-compatible expression AST backed by Z3 AST nodes.
 
 Each expression node carries:
-- ``_lean``: a Lean-syntax fragment
+- ``_ast``: a Z3 AST node (from :mod:`lean_py.z3._ast`)
 - ``_sort``: the expression's sort
-- ``_vars``: free variables as ``frozenset[tuple[str, str]]`` (name, lean_sort)
+- ``_vars``: free variables as ``frozenset[tuple[str, ASTSort]]``
 
 The tree is purely structural -- no Lean kernel interaction is needed
 to build expressions. Lean interaction only happens at proof time
@@ -14,6 +14,36 @@ from __future__ import annotations
 
 from typing import Sequence
 
+from lean_py.z3._ast import (
+    ASTNode,
+    ASTSort,
+    AppNode,
+    ArrowASTSort,
+    BitvecASTSort,
+    BinOp,
+    BinOpNode,
+    BoolLit,
+    BvLit,
+    ConstArrayNode,
+    DistinctNode,
+    ExistsNode,
+    ForAllNode,
+    IntASTSort,
+    IntLit,
+    IteNode,
+    NatASTSort,
+    NatLit,
+    PropSort,
+    RealASTSort,
+    SelectNode,
+    StoreNode,
+    UnOp,
+    TypeASTSort,
+    UnOpNode,
+    UninterpASTSort,
+    Var,
+)
+
 # ---------------------------------------------------------------------------
 # Sorts
 # ---------------------------------------------------------------------------
@@ -22,22 +52,19 @@ from typing import Sequence
 class SortRef:
     """Base sort."""
 
-    __slots__ = ("_lean",)
+    __slots__ = ("_ast_sort",)
 
-    def __init__(self, lean: str) -> None:
-        self._lean = lean
-
-    def to_lean(self) -> str:
-        return self._lean
+    def __init__(self, ast_sort: ASTSort) -> None:
+        self._ast_sort = ast_sort
 
     def __repr__(self) -> str:
-        return self._lean
+        return _sort_repr(self._ast_sort)
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, SortRef) and self._lean == other._lean
+        return isinstance(other, SortRef) and self._ast_sort == other._ast_sort
 
     def __hash__(self) -> int:
-        return hash(self._lean)
+        return hash(self._ast_sort)
 
 
 class BoolSortRef(SortRef):
@@ -54,23 +81,23 @@ class UninterpretedSortRef(SortRef):
 
 
 def BoolSort() -> BoolSortRef:
-    return BoolSortRef("Prop")
+    return BoolSortRef(PropSort())
 
 
 def IntSort() -> ArithSortRef:
-    return ArithSortRef("Int")
+    return ArithSortRef(IntASTSort())
 
 
 def NatSort() -> ArithSortRef:
-    return ArithSortRef("Nat")
+    return ArithSortRef(NatASTSort())
 
 
 def RealSort() -> ArithSortRef:
-    return ArithSortRef("Real")
+    return ArithSortRef(RealASTSort())
 
 
 def DeclareSort(name: str) -> UninterpretedSortRef:
-    return UninterpretedSortRef(name)
+    return UninterpretedSortRef(UninterpASTSort(name))
 
 
 class BitVecSortRef(SortRef):
@@ -79,7 +106,7 @@ class BitVecSortRef(SortRef):
     __slots__ = ("_width",)
 
     def __init__(self, width: int) -> None:
-        super().__init__(f"(BitVec {width})")
+        super().__init__(BitvecASTSort(width))
         self._width = width
 
     @property
@@ -97,7 +124,7 @@ class ArraySortRef(SortRef):
     __slots__ = ("_domain", "_range")
 
     def __init__(self, domain: SortRef, range_sort: SortRef) -> None:
-        super().__init__(f"({domain.to_lean()} \u2192 {range_sort.to_lean()})")
+        super().__init__(ArrowASTSort(domain._ast_sort, range_sort._ast_sort))
         self._domain = domain
         self._range = range_sort
 
@@ -120,26 +147,23 @@ def ArraySort(domain: SortRef, range_sort: SortRef) -> ArraySortRef:
 class ExprRef:
     """Base expression node."""
 
-    __slots__ = ("_lean", "_sort", "_vars")
+    __slots__ = ("_ast", "_sort", "_vars")
 
     def __init__(
         self,
-        lean: str,
+        ast: ASTNode,
         sort: SortRef,
-        vars: frozenset[tuple[str, str]] = frozenset(),
+        vars: frozenset[tuple[str, ASTSort]] = frozenset(),
     ) -> None:
-        self._lean = lean
+        self._ast = ast
         self._sort = sort
         self._vars = vars
-
-    def to_lean(self) -> str:
-        return self._lean
 
     def sort(self) -> SortRef:
         return self._sort
 
     def __repr__(self) -> str:
-        return self._lean
+        return _ast_repr(self._ast)
 
     def __eq__(self, other: object) -> BoolRef | NotImplemented:  # type: ignore[override]
         if isinstance(other, (int, float)):
@@ -147,7 +171,7 @@ class ExprRef:
         if not isinstance(other, ExprRef):
             return NotImplemented
         return BoolRef(
-            f"({self._lean} = {other._lean})",
+            BinOpNode(BinOp.EQ, self._ast, other._ast),
             _merge(self._vars, other._vars),
         )
 
@@ -157,12 +181,12 @@ class ExprRef:
         if not isinstance(other, ExprRef):
             return NotImplemented
         return BoolRef(
-            f"({self._lean} \u2260 {other._lean})",
+            BinOpNode(BinOp.NE, self._ast, other._ast),
             _merge(self._vars, other._vars),
         )
 
     def __hash__(self) -> int:
-        return hash(self._lean)
+        return hash(self._ast)
 
 
 class BoolRef(ExprRef):
@@ -172,10 +196,10 @@ class BoolRef(ExprRef):
 
     def __init__(
         self,
-        lean: str,
-        vars: frozenset[tuple[str, str]] = frozenset(),
+        ast: ASTNode,
+        vars: frozenset[tuple[str, ASTSort]] = frozenset(),
     ) -> None:
-        super().__init__(lean, BoolSort(), vars)
+        super().__init__(ast, BoolSort(), vars)
 
     def __and__(self, other: BoolRef) -> BoolRef:
         return And(self, other)
@@ -194,50 +218,50 @@ class ArithRef(ExprRef):
 
     def __init__(
         self,
-        lean: str,
+        ast: ASTNode,
         sort: ArithSortRef,
-        vars: frozenset[tuple[str, str]] = frozenset(),
+        vars: frozenset[tuple[str, ASTSort]] = frozenset(),
     ) -> None:
-        super().__init__(lean, sort, vars)
+        super().__init__(ast, sort, vars)
 
     def _binop(self, op: str, other: ArithRef | int | float) -> ArithRef:
         other = _coerce_arith(other, self._sort)
         return ArithRef(
-            f"({self._lean} {op} {other._lean})",
+            BinOpNode(op, self._ast, other._ast),
             self._sort,  # type: ignore[arg-type]
             _merge(self._vars, other._vars),
         )
 
     def __add__(self, other: ArithRef | int | float) -> ArithRef:
-        return self._binop("+", other)
+        return self._binop(BinOp.ADD, other)
 
     def __radd__(self, other: int | float) -> ArithRef:
-        return _coerce_arith(other, self._sort)._binop("+", self)
+        return _coerce_arith(other, self._sort)._binop(BinOp.ADD, self)
 
     def __sub__(self, other: ArithRef | int | float) -> ArithRef:
-        return self._binop("-", other)
+        return self._binop(BinOp.SUB, other)
 
     def __rsub__(self, other: int | float) -> ArithRef:
-        return _coerce_arith(other, self._sort)._binop("-", self)
+        return _coerce_arith(other, self._sort)._binop(BinOp.SUB, self)
 
     def __mul__(self, other: ArithRef | int | float) -> ArithRef:
-        return self._binop("*", other)
+        return self._binop(BinOp.MUL, other)
 
     def __rmul__(self, other: int | float) -> ArithRef:
-        return _coerce_arith(other, self._sort)._binop("*", self)
+        return _coerce_arith(other, self._sort)._binop(BinOp.MUL, self)
 
     def __truediv__(self, other: ArithRef | int | float) -> ArithRef:
-        return self._binop("/", other)
+        return self._binop(BinOp.DIV, other)
 
     def __mod__(self, other: ArithRef | int | float) -> ArithRef:
-        return self._binop("%", other)
+        return self._binop(BinOp.MOD, other)
 
     def __pow__(self, other: ArithRef | int | float) -> ArithRef:
-        return self._binop("^", other)
+        return self._binop(BinOp.MUL, other)  # placeholder
 
     def __neg__(self) -> ArithRef:
         return ArithRef(
-            f"(-{self._lean})",
+            UnOpNode(UnOp.NEG, self._ast),
             self._sort,  # type: ignore[arg-type]
             self._vars,
         )
@@ -245,28 +269,28 @@ class ArithRef(ExprRef):
     def __lt__(self, other: ArithRef | int | float) -> BoolRef:
         other = _coerce_arith(other, self._sort)
         return BoolRef(
-            f"({self._lean} < {other._lean})",
+            BinOpNode(BinOp.LT, self._ast, other._ast),
             _merge(self._vars, other._vars),
         )
 
     def __le__(self, other: ArithRef | int | float) -> BoolRef:
         other = _coerce_arith(other, self._sort)
         return BoolRef(
-            f"({self._lean} \u2264 {other._lean})",
+            BinOpNode(BinOp.LE, self._ast, other._ast),
             _merge(self._vars, other._vars),
         )
 
     def __gt__(self, other: ArithRef | int | float) -> BoolRef:
         other = _coerce_arith(other, self._sort)
         return BoolRef(
-            f"({self._lean} > {other._lean})",
+            BinOpNode(BinOp.GT, self._ast, other._ast),
             _merge(self._vars, other._vars),
         )
 
     def __ge__(self, other: ArithRef | int | float) -> BoolRef:
         other = _coerce_arith(other, self._sort)
         return BoolRef(
-            f"({self._lean} \u2265 {other._lean})",
+            BinOpNode(BinOp.GE, self._ast, other._ast),
             _merge(self._vars, other._vars),
         )
 
@@ -278,104 +302,104 @@ class BitVecRef(ExprRef):
 
     def __init__(
         self,
-        lean: str,
+        ast: ASTNode,
         sort: BitVecSortRef,
-        vars: frozenset[tuple[str, str]] = frozenset(),
+        vars: frozenset[tuple[str, ASTSort]] = frozenset(),
     ) -> None:
-        super().__init__(lean, sort, vars)
+        super().__init__(ast, sort, vars)
 
     def _binop(self, op: str, other: BitVecRef | int) -> BitVecRef:
         other = _coerce_bv(other, self._sort)
         return BitVecRef(
-            f"({self._lean} {op} {other._lean})",
+            BinOpNode(op, self._ast, other._ast),
             self._sort,  # type: ignore[arg-type]
             _merge(self._vars, other._vars),
         )
 
     # Arithmetic
     def __add__(self, other: BitVecRef | int) -> BitVecRef:
-        return self._binop("+", other)
+        return self._binop(BinOp.ADD, other)
 
     def __radd__(self, other: int) -> BitVecRef:
-        return _coerce_bv(other, self._sort)._binop("+", self)
+        return _coerce_bv(other, self._sort)._binop(BinOp.ADD, self)
 
     def __sub__(self, other: BitVecRef | int) -> BitVecRef:
-        return self._binop("-", other)
+        return self._binop(BinOp.SUB, other)
 
     def __rsub__(self, other: int) -> BitVecRef:
-        return _coerce_bv(other, self._sort)._binop("-", self)
+        return _coerce_bv(other, self._sort)._binop(BinOp.SUB, self)
 
     def __mul__(self, other: BitVecRef | int) -> BitVecRef:
-        return self._binop("*", other)
+        return self._binop(BinOp.MUL, other)
 
     def __rmul__(self, other: int) -> BitVecRef:
-        return _coerce_bv(other, self._sort)._binop("*", self)
+        return _coerce_bv(other, self._sort)._binop(BinOp.MUL, self)
 
     def __neg__(self) -> BitVecRef:
         return BitVecRef(
-            f"(-{self._lean})",
+            UnOpNode(UnOp.NEG, self._ast),
             self._sort,  # type: ignore[arg-type]
             self._vars,
         )
 
-    # Bitwise — Lean uses &&&, |||, ^^^, ~~~, <<<, >>>
+    # Bitwise
     def __and__(self, other: BitVecRef | int) -> BitVecRef:
-        return self._binop("&&&", other)
+        return self._binop(BinOp.BAND, other)
 
     def __rand__(self, other: int) -> BitVecRef:
-        return _coerce_bv(other, self._sort)._binop("&&&", self)
+        return _coerce_bv(other, self._sort)._binop(BinOp.BAND, self)
 
     def __or__(self, other: BitVecRef | int) -> BitVecRef:
-        return self._binop("|||", other)
+        return self._binop(BinOp.BOR, other)
 
     def __ror__(self, other: int) -> BitVecRef:
-        return _coerce_bv(other, self._sort)._binop("|||", self)
+        return _coerce_bv(other, self._sort)._binop(BinOp.BOR, self)
 
     def __xor__(self, other: BitVecRef | int) -> BitVecRef:
-        return self._binop("^^^", other)
+        return self._binop(BinOp.BXOR, other)
 
     def __rxor__(self, other: int) -> BitVecRef:
-        return _coerce_bv(other, self._sort)._binop("^^^", self)
+        return _coerce_bv(other, self._sort)._binop(BinOp.BXOR, self)
 
     def __invert__(self) -> BitVecRef:
         return BitVecRef(
-            f"(~~~{self._lean})",
+            UnOpNode(UnOp.BNOT, self._ast),
             self._sort,  # type: ignore[arg-type]
             self._vars,
         )
 
     def __lshift__(self, other: BitVecRef | int) -> BitVecRef:
-        return self._binop("<<<", other)
+        return self._binop(BinOp.BSHL, other)
 
     def __rshift__(self, other: BitVecRef | int) -> BitVecRef:
-        return self._binop(">>>", other)
+        return self._binop(BinOp.BSHR, other)
 
-    # Comparisons (unsigned in Lean by default)
+    # Comparisons
     def __lt__(self, other: BitVecRef | int) -> BoolRef:
         other = _coerce_bv(other, self._sort)
         return BoolRef(
-            f"({self._lean} < {other._lean})",
+            BinOpNode(BinOp.LT, self._ast, other._ast),
             _merge(self._vars, other._vars),
         )
 
     def __le__(self, other: BitVecRef | int) -> BoolRef:
         other = _coerce_bv(other, self._sort)
         return BoolRef(
-            f"({self._lean} \u2264 {other._lean})",
+            BinOpNode(BinOp.LE, self._ast, other._ast),
             _merge(self._vars, other._vars),
         )
 
     def __gt__(self, other: BitVecRef | int) -> BoolRef:
         other = _coerce_bv(other, self._sort)
         return BoolRef(
-            f"({self._lean} > {other._lean})",
+            BinOpNode(BinOp.GT, self._ast, other._ast),
             _merge(self._vars, other._vars),
         )
 
     def __ge__(self, other: BitVecRef | int) -> BoolRef:
         other = _coerce_bv(other, self._sort)
         return BoolRef(
-            f"({self._lean} \u2265 {other._lean})",
+            BinOpNode(BinOp.GE, self._ast, other._ast),
             _merge(self._vars, other._vars),
         )
 
@@ -387,11 +411,11 @@ class ArrayRef(ExprRef):
 
     def __init__(
         self,
-        lean: str,
+        ast: ASTNode,
         sort: ArraySortRef,
-        vars: frozenset[tuple[str, str]] = frozenset(),
+        vars: frozenset[tuple[str, ASTSort]] = frozenset(),
     ) -> None:
-        super().__init__(lean, sort, vars)
+        super().__init__(ast, sort, vars)
 
 
 class QuantifierRef(BoolRef):
@@ -405,13 +429,21 @@ class QuantifierRef(BoolRef):
         bound: list[ExprRef],
         body: BoolRef,
     ) -> None:
-        binders = " ".join(
-            f"({v._lean} : {v._sort.to_lean()})" for v in bound
-        )
-        bound_names = frozenset((v._lean, v._sort.to_lean()) for v in bound)
+        # Build nested ForAllNode/ExistsNode from inside out
+        bound_names = frozenset((v._ast.name, v._sort._ast_sort) for v in bound if isinstance(v._ast, Var))
         free = body._vars - bound_names
-        lean = f"({quantifier} {binders}, {body._lean})"
-        super().__init__(lean, free)
+
+        # Build the nested AST node
+        node_cls = ForAllNode if quantifier == "\u2200" else ExistsNode
+        ast: ASTNode = body._ast
+        for v in reversed(bound):
+            ast = node_cls(
+                name=v._ast.name if isinstance(v._ast, Var) else str(v._ast),
+                sort=v._sort._ast_sort,
+                body=ast,
+            )
+
+        super().__init__(ast, free)
         self._quantifier = quantifier
         self._bound = bound
         self._body = body
@@ -425,7 +457,7 @@ class QuantifierRef(BoolRef):
 class FuncDeclRef:
     """Uninterpreted function declaration, created via ``Function(...)``."""
 
-    __slots__ = ("_name", "_domain", "_range", "_lean_type")
+    __slots__ = ("_name", "_domain", "_range", "_ast_sort")
 
     def __init__(
         self,
@@ -436,28 +468,32 @@ class FuncDeclRef:
         self._name = name
         self._domain = domain
         self._range = range_sort
-        self._lean_type = " \u2192 ".join(
-            s.to_lean() for s in (*domain, range_sort)
-        )
+        # Build arrow sort for the function type
+        sorts = [*domain, range_sort]
+        ast_sort: ASTSort = sorts[-1]._ast_sort
+        for s in reversed(sorts[:-1]):
+            ast_sort = ArrowASTSort(s._ast_sort, ast_sort)
+        self._ast_sort = ast_sort
 
     def __call__(self, *args: ExprRef) -> ExprRef:
         if len(args) != len(self._domain):
             raise TypeError(
                 f"{self._name} expects {len(self._domain)} args, got {len(args)}"
             )
-        arg_strs = " ".join(a._lean for a in args)
-        lean = f"({self._name} {arg_strs})" if args else self._name
-        merged = frozenset().union(*(a._vars for a in args))
-        # The function itself is a free variable (its signature must be bound)
-        merged = merged | frozenset([(self._name, self._lean_type)])
+        merged: frozenset[tuple[str, ASTSort]] = frozenset().union(*(a._vars for a in args))
+        # The function itself is a free variable
+        merged = merged | frozenset([(self._name, self._ast_sort)])
         # Uninterpreted sorts used by the function are also free
         for s in (*self._domain, self._range):
-            if isinstance(s, UninterpretedSortRef):
-                merged = merged | frozenset([(s._lean, "Type")])
-        return ExprRef(lean, self._range, merged)
+            if isinstance(s, UninterpretedSortRef) and isinstance(s._ast_sort, UninterpASTSort):
+                merged = merged | frozenset([(s._ast_sort.name, TypeASTSort())])
+        func_ast = Var(self._name)
+        args_ast = tuple(a._ast for a in args)
+        ast = AppNode(func_ast, args_ast) if args else func_ast
+        return ExprRef(ast, self._range, merged)
 
     def __repr__(self) -> str:
-        return f"{self._name} : {self._lean_type}"
+        return f"{self._name} : {_sort_repr(self._ast_sort)}"
 
 
 def Function(name: str, *sorts: SortRef) -> FuncDeclRef:
@@ -478,7 +514,7 @@ def Function(name: str, *sorts: SortRef) -> FuncDeclRef:
 
 def Int(name: str) -> ArithRef:
     s = IntSort()
-    return ArithRef(name, s, frozenset([(name, s.to_lean())]))
+    return ArithRef(Var(name), s, frozenset([(name, s._ast_sort)]))
 
 
 def Ints(names: str) -> tuple[ArithRef, ...]:
@@ -487,12 +523,12 @@ def Ints(names: str) -> tuple[ArithRef, ...]:
 
 def Nat(name: str) -> ArithRef:
     s = NatSort()
-    return ArithRef(name, s, frozenset([(name, s.to_lean())]))
+    return ArithRef(Var(name), s, frozenset([(name, s._ast_sort)]))
 
 
 def Real(name: str) -> ArithRef:
     s = RealSort()
-    return ArithRef(name, s, frozenset([(name, s.to_lean())]))
+    return ArithRef(Var(name), s, frozenset([(name, s._ast_sort)]))
 
 
 def Reals(names: str) -> tuple[ArithRef, ...]:
@@ -500,7 +536,7 @@ def Reals(names: str) -> tuple[ArithRef, ...]:
 
 
 def Bool(name: str) -> BoolRef:
-    return BoolRef(name, frozenset([(name, "Prop")]))
+    return BoolRef(Var(name), frozenset([(name, PropSort())]))
 
 
 def Bools(names: str) -> tuple[BoolRef, ...]:
@@ -509,7 +545,7 @@ def Bools(names: str) -> tuple[BoolRef, ...]:
 
 def BitVec(name: str, width: int) -> BitVecRef:
     s = BitVecSort(width)
-    return BitVecRef(name, s, frozenset([(name, s.to_lean())]))
+    return BitVecRef(Var(name), s, frozenset([(name, s._ast_sort)]))
 
 
 def BitVecs(names: str, width: int) -> tuple[BitVecRef, ...]:
@@ -518,20 +554,23 @@ def BitVecs(names: str, width: int) -> tuple[BitVecRef, ...]:
 
 def Array(name: str, domain: SortRef, range_sort: SortRef) -> ArrayRef:
     s = ArraySort(domain, range_sort)
-    return ArrayRef(name, s, frozenset([(name, s.to_lean())]))
+    return ArrayRef(Var(name), s, frozenset([(name, s._ast_sort)]))
 
 
 def Const(name: str, sort: SortRef) -> ExprRef:
-    v = frozenset([(name, sort.to_lean())])
+    v: frozenset[tuple[str, ASTSort]] = frozenset([(name, sort._ast_sort)])
+    # If the sort is uninterpreted, also track it as a free type variable.
+    if isinstance(sort, UninterpretedSortRef) and isinstance(sort._ast_sort, UninterpASTSort):
+        v = v | frozenset([(sort._ast_sort.name, TypeASTSort())])
     if isinstance(sort, BoolSortRef):
-        return BoolRef(name, v)
+        return BoolRef(Var(name), v)
     if isinstance(sort, ArithSortRef):
-        return ArithRef(name, sort, v)
+        return ArithRef(Var(name), sort, v)
     if isinstance(sort, BitVecSortRef):
-        return BitVecRef(name, sort, v)
+        return BitVecRef(Var(name), sort, v)
     if isinstance(sort, ArraySortRef):
-        return ArrayRef(name, sort, v)
-    return ExprRef(name, sort, v)
+        return ArrayRef(Var(name), sort, v)
+    return ExprRef(Var(name), sort, v)
 
 
 def Consts(names: str, sort: SortRef) -> tuple[ExprRef, ...]:
@@ -544,25 +583,25 @@ def Consts(names: str, sort: SortRef) -> tuple[ExprRef, ...]:
 
 
 def IntVal(n: int) -> ArithRef:
-    lean = f"({n} : Int)" if n < 0 else f"({n} : Int)"
-    return ArithRef(lean, IntSort())
+    return ArithRef(IntLit(n), IntSort())
 
 
 def NatVal(n: int) -> ArithRef:
-    return ArithRef(f"({n} : Nat)", NatSort())
+    return ArithRef(NatLit(n), NatSort())
 
 
 def RealVal(n: int | float | str) -> ArithRef:
-    return ArithRef(f"({n} : Real)", RealSort())
+    # For now, treat as int literal on Real sort
+    return ArithRef(IntLit(int(n)), RealSort())
 
 
 def BoolVal(b: bool) -> BoolRef:
-    return BoolRef("True" if b else "False")
+    return BoolRef(BoolLit(b))
 
 
 def BitVecVal(val: int, width: int) -> BitVecRef:
     s = BitVecSort(width)
-    return BitVecRef(f"({val} : BitVec {width})", s)
+    return BitVecRef(BvLit(val, width), s)
 
 
 # ---------------------------------------------------------------------------
@@ -576,32 +615,30 @@ def Select(a: ArrayRef, idx: ExprRef) -> ExprRef:
     if not isinstance(sort, ArraySortRef):
         raise TypeError(f"Select requires ArrayRef, got {type(a)}")
     return ExprRef(
-        f"({a._lean} {idx._lean})",
+        SelectNode(a._ast, idx._ast),
         sort.range(),
         _merge(a._vars, idx._vars),
     )
 
 
 def Store(a: ArrayRef, idx: ExprRef, val: ExprRef) -> ArrayRef:
-    """Write to array: ``(fun x => if x = i then v else a x)``."""
+    """Write to array."""
     sort = a._sort
     if not isinstance(sort, ArraySortRef):
         raise TypeError(f"Store requires ArrayRef, got {type(a)}")
-    merged = frozenset().union(a._vars, idx._vars, val._vars)
-    dom = sort._domain.to_lean()
+    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(a._vars, idx._vars, val._vars)
     return ArrayRef(
-        f"(fun (_idx : {dom}) => if _idx = {idx._lean} then {val._lean} else {a._lean} _idx)",
+        StoreNode(a._ast, idx._ast, val._ast),
         sort,
         merged,
     )
 
 
 def K(domain: SortRef, val: ExprRef) -> ArrayRef:
-    """Constant array (all indices map to ``val``).
-    Maps to ``fun (_ : dom) => val`` in Lean."""
+    """Constant array (all indices map to ``val``)."""
     sort = ArraySort(domain, val._sort)
     return ArrayRef(
-        f"(fun (_ : {domain.to_lean()}) => {val._lean})",
+        ConstArrayNode(domain._ast_sort, val._ast),
         sort,
         val._vars,
     )
@@ -613,12 +650,7 @@ def K(domain: SortRef, val: ExprRef) -> ArrayRef:
 
 
 class _DatatypeBuilder:
-    """Build an algebraic datatype.
-
-    The resulting sort is uninterpreted, with constructor functions
-    generated as ``FuncDeclRef`` instances.  Mirrors the z3py
-    ``Datatype`` / ``create()`` pattern.
-    """
+    """Build an algebraic datatype."""
 
     def __init__(self, name: str) -> None:
         self._name = name
@@ -628,20 +660,18 @@ class _DatatypeBuilder:
         self._ctors.append((ctor_name, tuple(fields)))
 
     def create(self) -> UninterpretedSortRef:
-        sort = UninterpretedSortRef(self._name)
+        sort = UninterpretedSortRef(UninterpASTSort(self._name))
         for ctor_name, fields in self._ctors:
             if fields:
                 domain = tuple(f[1] for f in fields)
                 func = FuncDeclRef(ctor_name, domain, sort)
                 setattr(sort, ctor_name, func)
-                # Accessor functions
                 for field_name, field_sort in fields:
                     acc = FuncDeclRef(field_name, (sort,), field_sort)
                     setattr(sort, field_name, acc)
             else:
-                # Nullary constructor: a constant of this sort
-                val = ExprRef(ctor_name, sort, frozenset([
-                    (ctor_name, sort.to_lean()),
+                val = ExprRef(Var(ctor_name), sort, frozenset([
+                    (ctor_name, sort._ast_sort),
                 ]))
                 setattr(sort, ctor_name, val)
         return sort
@@ -661,9 +691,12 @@ def And(*args: BoolRef) -> BoolRef:
         return BoolVal(True)
     if len(args) == 1:
         return args[0]
-    merged = frozenset().union(*(a._vars for a in args))
-    lean = " \u2227 ".join(a._lean for a in args)
-    return BoolRef(f"({lean})", merged)
+    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(*(a._vars for a in args))
+    # Build left-associated And chain
+    ast: ASTNode = args[0]._ast
+    for a in args[1:]:
+        ast = BinOpNode(BinOp.AND, ast, a._ast)
+    return BoolRef(ast, merged)
 
 
 def Or(*args: BoolRef) -> BoolRef:
@@ -671,27 +704,29 @@ def Or(*args: BoolRef) -> BoolRef:
         return BoolVal(False)
     if len(args) == 1:
         return args[0]
-    merged = frozenset().union(*(a._vars for a in args))
-    lean = " \u2228 ".join(a._lean for a in args)
-    return BoolRef(f"({lean})", merged)
+    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(*(a._vars for a in args))
+    ast: ASTNode = args[0]._ast
+    for a in args[1:]:
+        ast = BinOpNode(BinOp.OR, ast, a._ast)
+    return BoolRef(ast, merged)
 
 
 def Not(a: BoolRef) -> BoolRef:
-    return BoolRef(f"(\u00ac{a._lean})", a._vars)
+    return BoolRef(UnOpNode(UnOp.NOT, a._ast), a._vars)
 
 
 def Implies(a: BoolRef, b: BoolRef) -> BoolRef:
-    return BoolRef(f"({a._lean} \u2192 {b._lean})", _merge(a._vars, b._vars))
+    return BoolRef(BinOpNode(BinOp.IMPLIES, a._ast, b._ast), _merge(a._vars, b._vars))
 
 
 def Xor(a: BoolRef, b: BoolRef) -> BoolRef:
-    return BoolRef(f"(Xor' {a._lean} {b._lean})", _merge(a._vars, b._vars))
+    return BoolRef(BinOpNode(BinOp.XOR, a._ast, b._ast), _merge(a._vars, b._vars))
 
 
 def If(c: BoolRef, t: ExprRef, e: ExprRef) -> ExprRef:
-    merged = frozenset().union(c._vars, t._vars, e._vars)
+    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(c._vars, t._vars, e._vars)
     return ExprRef(
-        f"(if {c._lean} then {t._lean} else {e._lean})",
+        IteNode(c._ast, t._ast, e._ast),
         t._sort,
         merged,
     )
@@ -700,13 +735,11 @@ def If(c: BoolRef, t: ExprRef, e: ExprRef) -> ExprRef:
 def Distinct(*args: ExprRef) -> BoolRef:
     if len(args) <= 1:
         return BoolVal(True)
-    merged = frozenset().union(*(a._vars for a in args))
-    clauses = []
-    for i in range(len(args)):
-        for j in range(i + 1, len(args)):
-            clauses.append(f"({args[i]._lean} \u2260 {args[j]._lean})")
-    lean = " \u2227 ".join(clauses)
-    return BoolRef(f"({lean})", merged)
+    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(*(a._vars for a in args))
+    return BoolRef(
+        DistinctNode(tuple(a._ast for a in args)),
+        merged,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -736,9 +769,9 @@ def Exists(
 
 
 def _merge(
-    a: frozenset[tuple[str, str]],
-    b: frozenset[tuple[str, str]],
-) -> frozenset[tuple[str, str]]:
+    a: frozenset[tuple[str, ASTSort]],
+    b: frozenset[tuple[str, ASTSort]],
+) -> frozenset[tuple[str, ASTSort]]:
     return a | b
 
 
@@ -746,7 +779,11 @@ def _coerce_arith(v: ArithRef | int | float, sort: SortRef) -> ArithRef:
     if isinstance(v, ArithRef):
         return v
     if isinstance(v, (int, float)):
-        return ArithRef(f"({v} : {sort.to_lean()})", sort)  # type: ignore[arg-type]
+        ast_sort = sort._ast_sort
+        if isinstance(ast_sort, NatASTSort):
+            return ArithRef(NatLit(int(v)), sort)  # type: ignore[arg-type]
+        else:
+            return ArithRef(IntLit(int(v)), sort)  # type: ignore[arg-type]
     raise TypeError(f"Cannot coerce {type(v)} to ArithRef")
 
 
@@ -754,16 +791,72 @@ def _coerce_bv(v: BitVecRef | int, sort: SortRef) -> BitVecRef:
     if isinstance(v, BitVecRef):
         return v
     if isinstance(v, int) and isinstance(sort, BitVecSortRef):
-        return BitVecRef(f"({v} : BitVec {sort._width})", sort)
+        return BitVecRef(BvLit(v, sort._width), sort)
     raise TypeError(f"Cannot coerce {type(v)} to BitVecRef")
 
 
 def _coerce_val(v: int | float, sort: SortRef) -> ExprRef:
     if isinstance(sort, ArithSortRef):
-        return ArithRef(f"({v} : {sort.to_lean()})", sort)
+        return _coerce_arith(v, sort)
     if isinstance(sort, BitVecSortRef):
-        return BitVecRef(f"({v} : BitVec {sort._width})", sort)
-    return ExprRef(str(v), sort)
+        return BitVecRef(BvLit(int(v), sort._width), sort)
+    return ExprRef(IntLit(int(v)), sort)
+
+
+def _sort_repr(s: ASTSort) -> str:
+    """Human-readable string for an ASTSort."""
+    if isinstance(s, PropSort):
+        return "Prop"
+    if isinstance(s, IntASTSort):
+        return "Int"
+    if isinstance(s, NatASTSort):
+        return "Nat"
+    if isinstance(s, RealASTSort):
+        return "Real"
+    if isinstance(s, BitvecASTSort):
+        return f"(BitVec {s.width})"
+    if isinstance(s, UninterpASTSort):
+        return s.name
+    if isinstance(s, ArrowASTSort):
+        return f"({_sort_repr(s.dom)} \u2192 {_sort_repr(s.cod)})"
+    return str(s)
+
+
+def _ast_repr(node: ASTNode) -> str:
+    """Human-readable string for an ASTNode (for debugging)."""
+    if isinstance(node, Var):
+        return node.name
+    if isinstance(node, IntLit):
+        return str(node.val)
+    if isinstance(node, NatLit):
+        return str(node.val)
+    if isinstance(node, BoolLit):
+        return "True" if node.val else "False"
+    if isinstance(node, BvLit):
+        return f"{node.val}#{node.width}"
+    if isinstance(node, BinOpNode):
+        return f"({_ast_repr(node.lhs)} {node.op} {_ast_repr(node.rhs)})"
+    if isinstance(node, UnOpNode):
+        return f"({node.op} {_ast_repr(node.arg)})"
+    if isinstance(node, IteNode):
+        return f"(if {_ast_repr(node.cond)} then {_ast_repr(node.then_)} else {_ast_repr(node.else_)})"
+    if isinstance(node, ForAllNode):
+        return f"(\u2200 {node.name}, {_ast_repr(node.body)})"
+    if isinstance(node, ExistsNode):
+        return f"(\u2203 {node.name}, {_ast_repr(node.body)})"
+    if isinstance(node, AppNode):
+        args = " ".join(_ast_repr(a) for a in node.args)
+        return f"({_ast_repr(node.func)} {args})"
+    if isinstance(node, DistinctNode):
+        args = ", ".join(_ast_repr(a) for a in node.args)
+        return f"(distinct {args})"
+    if isinstance(node, SelectNode):
+        return f"(select {_ast_repr(node.arr)} {_ast_repr(node.idx)})"
+    if isinstance(node, StoreNode):
+        return f"(store {_ast_repr(node.arr)} {_ast_repr(node.idx)} {_ast_repr(node.val)})"
+    if isinstance(node, ConstArrayNode):
+        return f"(const-array {_ast_repr(node.val)})"
+    return str(node)
 
 
 # ---------------------------------------------------------------------------

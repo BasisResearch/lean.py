@@ -52,7 +52,27 @@ from lean_py.z3 import (
     unknown,
     unsat,
 )
-from lean_py.z3.solver import _goal_string, _try_prove
+from lean_py.z3._ast import (
+    BinOp,
+    BinOpNode,
+    BoolLit,
+    BvLit,
+    ConstArrayNode,
+    DistinctNode,
+    ExistsNode,
+    ForAllNode,
+    IntASTSort,
+    IntLit,
+    IteNode,
+    NatLit,
+    PropSort,
+    SelectNode,
+    StoreNode,
+    UnOp,
+    UnOpNode,
+    Var,
+)
+from lean_py.z3.solver import _try_prove
 
 
 @pytest.fixture(scope="module")
@@ -73,124 +93,140 @@ def kernel(example_lib) -> Kernel:
 class TestExprBuilding:
     def test_int_var(self):
         x = Int("x")
-        assert x.to_lean() == "x"
+        assert isinstance(x._ast, Var) and x._ast.name == "x"
         assert x.sort() == IntSort()
-        assert ("x", "Int") in x._vars
+        assert any(n == "x" for n, _ in x._vars)
 
     def test_arith_ops(self):
         x, y = Ints("x y")
-        assert (x + y).to_lean() == "(x + y)"
-        assert (x - y).to_lean() == "(x - y)"
-        assert (x * y).to_lean() == "(x * y)"
-        assert (-x).to_lean() == "(-x)"
+        add = x + y
+        assert isinstance(add._ast, BinOpNode) and add._ast.op == BinOp.ADD
+        sub = x - y
+        assert isinstance(sub._ast, BinOpNode) and sub._ast.op == BinOp.SUB
+        mul = x * y
+        assert isinstance(mul._ast, BinOpNode) and mul._ast.op == BinOp.MUL
+        neg = -x
+        assert isinstance(neg._ast, UnOpNode) and neg._ast.op == UnOp.NEG
 
     def test_comparison(self):
         x = Int("x")
-        assert (x > 5).to_lean() == "(x > (5 : Int))"
-        assert (x < 5).to_lean() == "(x < (5 : Int))"
-        assert (x >= 5).to_lean() == "(x \u2265 (5 : Int))"
-        assert (x <= 5).to_lean() == "(x \u2264 (5 : Int))"
+        gt = x > 5
+        assert isinstance(gt._ast, BinOpNode) and gt._ast.op == BinOp.GT
+        lt = x < 5
+        assert isinstance(lt._ast, BinOpNode) and lt._ast.op == BinOp.LT
+        ge = x >= 5
+        assert isinstance(ge._ast, BinOpNode) and ge._ast.op == BinOp.GE
+        le = x <= 5
+        assert isinstance(le._ast, BinOpNode) and le._ast.op == BinOp.LE
 
     def test_eq_ne(self):
         x, y = Ints("x y")
         eq = x == y
+        assert isinstance(eq._ast, BinOpNode) and eq._ast.op == BinOp.EQ
         ne = x != y
-        assert eq.to_lean() == "(x = y)"
-        assert ne.to_lean() == "(x \u2260 y)"
+        assert isinstance(ne._ast, BinOpNode) and ne._ast.op == BinOp.NE
 
     def test_bool_ops(self):
         a, b = Bool("a"), Bool("b")
-        assert And(a, b).to_lean() == "(a \u2227 b)"
-        assert Or(a, b).to_lean() == "(a \u2228 b)"
-        assert Not(a).to_lean() == "(\u00aca)"
-        assert Implies(a, b).to_lean() == "(a \u2192 b)"
-        assert Xor(a, b).to_lean() == "(Xor' a b)"
+        conj = And(a, b)
+        assert isinstance(conj._ast, BinOpNode) and conj._ast.op == BinOp.AND
+        disj = Or(a, b)
+        assert isinstance(disj._ast, BinOpNode) and disj._ast.op == BinOp.OR
+        neg = Not(a)
+        assert isinstance(neg._ast, UnOpNode) and neg._ast.op == UnOp.NOT
+        imp = Implies(a, b)
+        assert isinstance(imp._ast, BinOpNode) and imp._ast.op == BinOp.IMPLIES
+        xr = Xor(a, b)
+        assert isinstance(xr._ast, BinOpNode) and xr._ast.op == BinOp.XOR
 
     def test_bool_operators(self):
         a, b = Bool("a"), Bool("b")
-        assert (a & b).to_lean() == "(a \u2227 b)"
-        assert (a | b).to_lean() == "(a \u2228 b)"
-        assert (~a).to_lean() == "(\u00aca)"
+        assert isinstance((a & b)._ast, BinOpNode) and (a & b)._ast.op == BinOp.AND
+        assert isinstance((a | b)._ast, BinOpNode) and (a | b)._ast.op == BinOp.OR
+        assert isinstance((~a)._ast, UnOpNode) and (~a)._ast.op == UnOp.NOT
 
     def test_forall(self):
         x = Int("x")
         expr = ForAll([x], x + 0 == x)
-        assert "\u2200" in expr.to_lean()
-        assert "(x : Int)" in expr.to_lean()
+        assert isinstance(expr._ast, ForAllNode)
+        assert expr._ast.name == "x"
         # x should be bound, not free
-        assert ("x", "Int") not in expr._vars
+        assert not any(n == "x" for n, _ in expr._vars)
 
     def test_exists(self):
         x = Int("x")
         expr = Exists([x], x > 0)
-        assert "\u2203" in expr.to_lean()
+        assert isinstance(expr._ast, ExistsNode)
 
     def test_distinct(self):
         x, y, z = Ints("x y z")
         d = Distinct(x, y, z)
-        assert "\u2260" in d.to_lean()
-        assert "\u2227" in d.to_lean()
+        assert isinstance(d._ast, DistinctNode)
+        assert len(d._ast.args) == 3
 
     def test_if_then_else(self):
         x = Int("x")
         expr = If(x > 0, x, -x)
-        assert "if" in expr.to_lean()
-        assert "then" in expr.to_lean()
-        assert "else" in expr.to_lean()
+        assert isinstance(expr._ast, IteNode)
 
     def test_int_coercion(self):
         x = Int("x")
-        assert (x + 1).to_lean() == "(x + (1 : Int))"
-        assert (1 + x).to_lean() == "((1 : Int) + x)"
-        assert (x > 5).to_lean() == "(x > (5 : Int))"
+        add = x + 1
+        assert isinstance(add._ast, BinOpNode) and add._ast.op == BinOp.ADD
+        assert isinstance(add._ast.rhs, IntLit) and add._ast.rhs.val == 1
+        radd = 1 + x
+        assert isinstance(radd._ast, BinOpNode) and radd._ast.op == BinOp.ADD
+        assert isinstance(radd._ast.lhs, IntLit) and radd._ast.lhs.val == 1
 
     def test_function_decl(self):
         S = DeclareSort("S")
         f = Function("f", IntSort(), S)
         x = Int("x")
         app = f(x)
-        assert app.to_lean() == "(f x)"
         # f and S should be free vars
         assert any(n == "f" for n, _ in app._vars)
-        assert ("S", "Type") in app._vars
+        var_names = {n for n, _ in app._vars}
+        assert "S" in var_names
 
     def test_nat_var(self):
         n = Nat("n")
         assert n.sort() == NatSort()
-        assert ("n", "Nat") in n._vars
+        assert any(name == "n" for name, _ in n._vars)
 
     def test_val_constructors(self):
-        assert IntVal(42).to_lean() == "(42 : Int)"
-        assert NatVal(7).to_lean() == "(7 : Nat)"
-        assert BoolVal(True).to_lean() == "True"
-        assert BoolVal(False).to_lean() == "False"
+        assert isinstance(IntVal(42)._ast, IntLit) and IntVal(42)._ast.val == 42
+        assert isinstance(NatVal(7)._ast, NatLit) and NatVal(7)._ast.val == 7
+        assert isinstance(BoolVal(True)._ast, BoolLit) and BoolVal(True)._ast.val is True
+        assert isinstance(BoolVal(False)._ast, BoolLit) and BoolVal(False)._ast.val is False
 
 
-class TestGoalString:
+class TestCompilation:
+    """Tests that AST is properly structured for compilation."""
+
     def test_no_vars(self):
-        assert _goal_string(BoolVal(True)) == "True"
+        bv = BoolVal(True)
+        assert isinstance(bv._ast, BoolLit)
+        assert len(bv._vars) == 0
 
     def test_single_var(self):
         x = Int("x")
-        goal = _goal_string(x > 0)
-        assert goal == "\u2200 (x : Int), (x > (0 : Int))"
+        expr = x > 0
+        assert len(expr._vars) == 1
 
-    def test_multiple_vars_sorted(self):
+    def test_multiple_vars(self):
         x, y = Ints("x y")
-        goal = _goal_string(And(x > 0, y > 0))
-        assert "\u2200" in goal
-        assert "(x : Int)" in goal
-        assert "(y : Int)" in goal
+        expr = And(x > 0, y > 0)
+        assert len(expr._vars) == 2
 
-    def test_uninterpreted_sort_comes_first(self):
+    def test_uninterpreted_sort_tracked(self):
         S = DeclareSort("S")
         f = Function("f", S, BoolSort())
         a = Const("a", S)
-        goal = _goal_string(f(a))
-        # Type var S should come before value var a and function f
-        idx_s = goal.index("(S : Type)")
-        idx_a = goal.index("(a : S)")
-        assert idx_s < idx_a
+        app = f(a)
+        var_names = {n for n, _ in app._vars}
+        assert "S" in var_names
+        assert "a" in var_names
+        assert "f" in var_names
 
 
 # ------------------------------------------------------------------
@@ -199,35 +235,35 @@ class TestGoalString:
 
 
 class TestProve:
-    def test_arith_simple(self, kernel, capsys):
+    def test_arith_simple(self, kernel):
         x = Int("x")
-        result = _try_prove(_goal_string(Implies(x > 0, x + 1 > 0)))
+        result = _try_prove(Implies(x > 0, x + 1 > 0))
         assert result is True
 
     def test_linear_combo(self, kernel):
         x, y = Ints("x y")
         claim = Implies(And(x > 0, y > 0), x + y > 0)
-        assert _try_prove(_goal_string(claim))
+        assert _try_prove(claim)
 
     def test_nat_identity(self, kernel):
         n = Nat("n")
         claim = ForAll([n], n + 0 == n)
-        assert _try_prove(_goal_string(claim))
+        assert _try_prove(claim)
 
     def test_bool_tautology(self, kernel):
         p = Bool("p")
         claim = Implies(p, p)
-        assert _try_prove(_goal_string(claim))
+        assert _try_prove(claim)
 
     def test_double_negation(self, kernel):
         p = Bool("p")
         claim = Implies(Not(Not(p)), p)
-        assert _try_prove(_goal_string(claim))
+        assert _try_prove(claim)
 
     def test_nat_arith(self, kernel):
         n = Nat("n")
         claim = ForAll([n], Implies(n > 0, n + 1 > 1))
-        assert _try_prove(_goal_string(claim))
+        assert _try_prove(claim)
 
 
 # ------------------------------------------------------------------
@@ -257,7 +293,6 @@ class TestSolver:
         assert s.check() == unsat
         s.pop()
         # After pop, only x > 0 remains -- not contradictory
-        # (can't prove negation of a satisfiable formula)
         assert s.check() == unknown
 
     def test_context_manager(self, kernel):
@@ -296,7 +331,7 @@ class TestSyllogism:
         conclusion = Mortal(socrates)
 
         claim = Implies(And(all_men_mortal, socrates_is_man), conclusion)
-        assert _try_prove(_goal_string(claim))
+        assert _try_prove(claim)
 
 
 # ------------------------------------------------------------------
@@ -307,21 +342,14 @@ class TestSyllogism:
 class TestNQueens:
     def test_2queens_unsat(self, kernel):
         """2 queens on a 2x2 board is impossible."""
-        # q_i = column of queen in row i (1-indexed for simplicity)
         q0, q1 = Int("q0"), Int("q1")
 
         constraints = []
-        # Columns in range [1,2]
         for q in (q0, q1):
             constraints.append(q >= IntVal(1))
             constraints.append(q <= IntVal(2))
 
-        # Different columns
         constraints.append(Distinct(q0, q1))
-
-        # No diagonal attacks: |q0 - q1| != |0 - 1| = 1
-        # Since we have 2 rows, row diff is always 1
-        # q0 - q1 != 1 and q0 - q1 != -1
         constraints.append(q0 - q1 != IntVal(1))
         constraints.append(q0 - q1 != IntVal(-1))
 
@@ -338,50 +366,52 @@ class TestNQueens:
 class TestBitVec:
     def test_bitvec_var(self):
         x = BitVec("x", 8)
-        assert x.to_lean() == "x"
+        assert isinstance(x._ast, Var) and x._ast.name == "x"
         assert x.sort() == BitVecSort(8)
-        assert ("x", "(BitVec 8)") in x._vars
 
     def test_bitvec_val(self):
         v = BitVecVal(42, 8)
-        assert v.to_lean() == "(42 : BitVec 8)"
+        assert isinstance(v._ast, BvLit) and v._ast.val == 42 and v._ast.width == 8
 
     def test_bitvec_arithmetic(self):
         x, y = BitVecs("x y", 8)
-        assert (x + y).to_lean() == "(x + y)"
-        assert (x - y).to_lean() == "(x - y)"
-        assert (x * y).to_lean() == "(x * y)"
-        assert (-x).to_lean() == "(-x)"
+        assert isinstance((x + y)._ast, BinOpNode) and (x + y)._ast.op == BinOp.ADD
+        assert isinstance((x - y)._ast, BinOpNode) and (x - y)._ast.op == BinOp.SUB
+        assert isinstance((x * y)._ast, BinOpNode) and (x * y)._ast.op == BinOp.MUL
+        assert isinstance((-x)._ast, UnOpNode) and (-x)._ast.op == UnOp.NEG
 
     def test_bitvec_bitwise(self):
         x, y = BitVecs("x y", 8)
-        assert (x & y).to_lean() == "(x &&& y)"
-        assert (x | y).to_lean() == "(x ||| y)"
-        assert (x ^ y).to_lean() == "(x ^^^ y)"
-        assert (~x).to_lean() == "(~~~x)"
+        assert isinstance((x & y)._ast, BinOpNode) and (x & y)._ast.op == BinOp.BAND
+        assert isinstance((x | y)._ast, BinOpNode) and (x | y)._ast.op == BinOp.BOR
+        assert isinstance((x ^ y)._ast, BinOpNode) and (x ^ y)._ast.op == BinOp.BXOR
+        assert isinstance((~x)._ast, UnOpNode) and (~x)._ast.op == UnOp.BNOT
 
     def test_bitvec_shift(self):
         x = BitVec("x", 8)
-        assert (x << 2).to_lean() == "(x <<< (2 : BitVec 8))"
-        assert (x >> 1).to_lean() == "(x >>> (1 : BitVec 8))"
+        assert isinstance((x << 2)._ast, BinOpNode) and (x << 2)._ast.op == BinOp.BSHL
+        assert isinstance((x >> 1)._ast, BinOpNode) and (x >> 1)._ast.op == BinOp.BSHR
 
     def test_bitvec_comparison(self):
         x = BitVec("x", 8)
-        assert (x > 5).to_lean() == "(x > (5 : BitVec 8))"
-        assert (x == BitVecVal(0, 8)).to_lean() == "(x = (0 : BitVec 8))"
+        assert isinstance((x > 5)._ast, BinOpNode) and (x > 5)._ast.op == BinOp.GT
+        eq = x == BitVecVal(0, 8)
+        assert isinstance(eq._ast, BinOpNode) and eq._ast.op == BinOp.EQ
 
     def test_bitvec_coercion(self):
         x = BitVec("x", 8)
-        assert (x + 1).to_lean() == "(x + (1 : BitVec 8))"
-        assert (1 + x).to_lean() == "((1 : BitVec 8) + x)"
+        add = x + 1
+        assert isinstance(add._ast, BinOpNode) and isinstance(add._ast.rhs, BvLit)
+        radd = 1 + x
+        assert isinstance(radd._ast, BinOpNode) and isinstance(radd._ast.lhs, BvLit)
 
     def test_bitvec_or_idempotent(self, kernel):
         x = BitVec("x", 8)
-        assert _try_prove(_goal_string(ForAll([x], (x | x) == x)))
+        assert _try_prove(ForAll([x], (x | x) == x))
 
     def test_bitvec_and_self(self, kernel):
         x = BitVec("x", 8)
-        assert _try_prove(_goal_string(ForAll([x], (x & x) == x)))
+        assert _try_prove(ForAll([x], (x & x) == x))
 
 
 # ------------------------------------------------------------------
@@ -392,31 +422,28 @@ class TestBitVec:
 class TestArray:
     def test_array_sort(self):
         s = ArraySort(IntSort(), IntSort())
-        assert "→" in s.to_lean()
+        assert "\u2192" in repr(s)
 
     def test_array_var(self):
         a = Array("a", IntSort(), IntSort())
-        assert a.to_lean() == "a"
-        assert ("a", "(Int → Int)") in a._vars
+        assert isinstance(a._ast, Var) and a._ast.name == "a"
 
     def test_select(self):
         a = Array("a", IntSort(), IntSort())
         i = Int("i")
         sel = Select(a, i)
-        assert sel.to_lean() == "(a i)"
+        assert isinstance(sel._ast, SelectNode)
 
     def test_store(self):
         a = Array("a", IntSort(), IntSort())
         i = Int("i")
         v = Int("v")
         s = Store(a, i, v)
-        assert "if" in s.to_lean()
-        assert "then" in s.to_lean()
+        assert isinstance(s._ast, StoreNode)
 
     def test_constant_array(self):
         c = K(IntSort(), IntVal(0))
-        assert "fun" in c.to_lean()
-        assert "(0 : Int)" in c.to_lean()
+        assert isinstance(c._ast, ConstArrayNode)
 
     def test_select_store_same_index(self, kernel):
         """Store then Select at the same index gives the written value."""
@@ -425,14 +452,14 @@ class TestArray:
         written = Store(a, IntVal(3), v)
         read_back = Select(written, IntVal(3))
         claim = ForAll([a, v], read_back == v)
-        assert _try_prove(_goal_string(claim))
+        assert _try_prove(claim)
 
     def test_constant_array_read(self, kernel):
         """Reading from a constant array gives the constant value."""
         i = Int("i")
         c = K(IntSort(), IntVal(42))
         claim = ForAll([i], Select(c, i) == IntVal(42))
-        assert _try_prove(_goal_string(claim))
+        assert _try_prove(claim)
 
 
 # ------------------------------------------------------------------
@@ -470,9 +497,7 @@ class TestDatatype:
         Color = Color.create()
 
         expr = Color.red != Color.green
-        assert "≠" in expr.to_lean()
-        assert "red" in expr.to_lean()
-        assert "green" in expr.to_lean()
+        assert isinstance(expr._ast, BinOpNode) and expr._ast.op == BinOp.NE
 
     def test_constructor_application(self):
         Pair = Datatype("Pair")
@@ -481,4 +506,5 @@ class TestDatatype:
 
         x, y = Ints("x y")
         p = Pair.mk(x, y)
-        assert "(mk x y)" in p.to_lean()
+        from lean_py.z3._ast import AppNode
+        assert isinstance(p._ast, AppNode)

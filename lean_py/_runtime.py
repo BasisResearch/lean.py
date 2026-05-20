@@ -458,6 +458,44 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         arr = ctypes.cast(addr, POINTER(LeanObjectPtr * (i + 1)))
         arr.contents[i] = v
 
+    def lean_ctor_scalar_addr(self, o, byte_offset):
+        """Base address + byte_offset into the m_objs region of a ctor."""
+        ctor_cls = structs.get("lean_ctor_object")
+        ctor = ctypes.cast(o, POINTER(ctor_cls))
+        return ctypes.addressof(ctor.contents) + ctor_cls.m_objs.offset + byte_offset
+
+    def lean_ctor_get_uint8(self, o, byte_offset):
+        addr = self.lean_ctor_scalar_addr(o, byte_offset)
+        return ctypes.cast(addr, POINTER(c_uint8)).contents.value
+
+    def lean_ctor_set_uint8(self, o, byte_offset, val):
+        addr = self.lean_ctor_scalar_addr(o, byte_offset)
+        ctypes.cast(addr, POINTER(c_uint8))[0] = val
+
+    def lean_ctor_get_uint16(self, o, byte_offset):
+        addr = self.lean_ctor_scalar_addr(o, byte_offset)
+        return ctypes.cast(addr, POINTER(c_uint16)).contents.value
+
+    def lean_ctor_set_uint16(self, o, byte_offset, val):
+        addr = self.lean_ctor_scalar_addr(o, byte_offset)
+        ctypes.cast(addr, POINTER(c_uint16))[0] = val
+
+    def lean_ctor_get_uint32(self, o, byte_offset):
+        addr = self.lean_ctor_scalar_addr(o, byte_offset)
+        return ctypes.cast(addr, POINTER(c_uint32)).contents.value
+
+    def lean_ctor_set_uint32(self, o, byte_offset, val):
+        addr = self.lean_ctor_scalar_addr(o, byte_offset)
+        ctypes.cast(addr, POINTER(c_uint32))[0] = val
+
+    def lean_ctor_get_uint64(self, o, byte_offset):
+        addr = self.lean_ctor_scalar_addr(o, byte_offset)
+        return ctypes.cast(addr, POINTER(c_uint64)).contents.value
+
+    def lean_ctor_set_uint64(self, o, byte_offset, val):
+        addr = self.lean_ctor_scalar_addr(o, byte_offset)
+        ctypes.cast(addr, POINTER(c_uint64))[0] = val
+
     def lean_array_size(self, o):
         arr_cls = structs.get("lean_array_object")
         arr = ctypes.cast(o, POINTER(arr_cls))
