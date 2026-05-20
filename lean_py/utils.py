@@ -21,6 +21,26 @@ def run_command(args: list[str], **kwargs) -> str:
 
 
 @lru_cache(maxsize=1)
+def lean_toolchain_version() -> str:
+    """Return the lean-toolchain string (e.g. ``leanprover/lean4:v4.29.1``).
+
+    Reads from the repo-root ``lean-toolchain`` file if available,
+    otherwise falls back to parsing ``lean --version``.
+    """
+    tc = Path(__file__).resolve().parent.parent / "lean-toolchain"
+    if tc.exists():
+        return tc.read_text().strip()
+    # Fallback: parse "Lean (version 4.x.y, ...)"
+    out = run_command(["lean", "--version"])
+    # Extract "leanprover/lean4:vX.Y.Z" from version string
+    for part in out.split():
+        if part.startswith("4.") or part.startswith("v4."):
+            v = part.rstrip(",").lstrip("v")
+            return f"leanprover/lean4:v{v}"
+    return out
+
+
+@lru_cache(maxsize=1)
 def lean_prefix() -> Path:
     """Return the path printed by `lean --print-prefix`."""
     return Path(run_command(["lean", "--print-prefix"]))
