@@ -14,9 +14,10 @@ manually creating a lakefile::
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
-from importlib.metadata import version as pkg_version
+from importlib.metadata import distribution, version as pkg_version
 from pathlib import Path
 
 from lean_py.kernel import Kernel
@@ -74,8 +75,25 @@ def _leanpy_version() -> str:
 
 
 def _leanpy_git_rev() -> str:
-    """Git rev for the LeanPy Lake dependency when pip-installed."""
-    return os.environ.get("LEANPY_GIT_REV", f"v{_leanpy_version()}")
+    """Git rev for the LeanPy Lake dependency when pip-installed.
+
+    Resolution order: LEANPY_GIT_REV env var, then the commit hash from
+    direct_url.json (set by pip for git installs), then v{version} tag.
+    """
+    override = os.environ.get("LEANPY_GIT_REV")
+    if override:
+        return override
+    try:
+        dist = distribution("lean_py")
+        raw = dist.read_text("direct_url.json")
+        if raw:
+            info = json.loads(raw)
+            commit = info.get("vcs_info", {}).get("commit_id")
+            if commit:
+                return commit
+    except Exception:
+        pass
+    return f"v{_leanpy_version()}"
 
 
 def _cache_key(lean_version: str, deps: tuple[str, ...]) -> str:
