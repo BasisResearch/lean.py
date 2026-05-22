@@ -22,6 +22,7 @@ Effortless interop between **Lean 4** and **Python**, in both directions.
 
    getting_started
    project_setup
+   z3py-guide
 
 .. toctree::
    :maxdepth: 1
