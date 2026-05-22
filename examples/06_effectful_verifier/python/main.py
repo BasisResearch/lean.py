@@ -28,11 +28,14 @@ kernel.init_search("")
 kernel.load(["Init"])
 
 def verify(fn):
+    all_ok = True
     for msg, ok in verify_function(fn, lib, kernel):
         if not ok:
-            raise Exception(f"VERIFICATION FAILED FOR {fn.__name__}: {msg}")
-        print(f"  VERIFIED: {msg}")
-    return True
+            print(f"  REJECTED: {msg}")
+            all_ok = False
+        else:
+            print(f"  VERIFIED: {msg}")
+    return all_ok
 
 
 # ---------------------------------------------------------------------------

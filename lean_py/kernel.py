@@ -335,6 +335,12 @@ class Kernel:
         handle = self._lib.leanpy_kernel_goal_create(type_str)
         return GoalState(self, handle)
 
+    def goal_create_expr(self, expr: Any) -> GoalState:
+        """Create a new goal state from a ``Lean.Expr`` object. Raises
+        ``LeanError`` on type-check failure."""
+        handle = self._lib.z3_goal_create_expr(expr)
+        return GoalState(self, handle)
+
     def goal_unpickle(self, path: str) -> GoalState:
         """Load a goal state previously serialised with :meth:`GoalState.pickle`."""
         handle, err = self._lib.leanpy_kernel_goal_unpickle(str(path))

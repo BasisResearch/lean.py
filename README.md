@@ -193,6 +193,119 @@ The kernel API also exposes environment introspection (`catalog`,
 `pretty_print`, `whnf`), frontend processing, and goal-state pickling.
 See `lean_py/kernel.py` for the full surface.
 
+## z3py-compatible prover
+
+Lean's `grind` tactic is a powerful automated reasoning engine — congruence
+closure, arithmetic, and more — but calling it means setting up a Lake
+project, marshalling goal strings, and threading tactic results. `lean_py.z3`
+wraps all of that behind a z3py-compatible API so you can write propositions
+in Python and prove them with one call.
+
+```python
+from lean_py.z3 import *
+
+x, y = Ints('x y')
+prove(Implies(And(x > 0, y > 0), x + y > 0))   # prints "proved"
+```
+
+Expressions build up Lean syntax under the hood. Operator overloading on
+`ArithRef` (`+`, `-`, `*`, `<`, `<=`, ...) and `BoolRef` (`&`, `|`, `~`)
+works exactly like z3py. Free variables are tracked automatically and bound
+as `∀` quantifiers at proof time.
+
+```python
+# Solver interface — same as z3py
+s = Solver()
+s.add(x > 0, x < 0)
+s.check()              # unsat (negation proved via grind)
+
+# Quantifiers, uninterpreted sorts, functions
+Entity = DeclareSort('Entity')
+Man = Function('Man', Entity, BoolSort())
+Mortal = Function('Mortal', Entity, BoolSort())
+socrates = Const('socrates', Entity)
+e = Const('e', Entity)
+
+prove(Implies(
+    And(ForAll([e], Implies(Man(e), Mortal(e))),
+        Man(socrates)),
+    Mortal(socrates),
+))                     # proved
+```
+
+The solver tries tactics in order: `grind`, `omega`, `decide`, `simp_all`.
+Because Lean is a proof checker and not an SMT solver, `check()` returns
+`unsat` (negation proved) or `unknown` — never `sat`. Model extraction is
+not supported.
+
+### Setup
+
+The z3 layer needs a `Kernel` to talk to Lean. Two options:
+
+**Manual** — point at an existing Lake project (the kernel facade you
+already know):
+
+```python
+from lean_py import LeanLibrary
+from lean_py.kernel import Kernel
+from lean_py.z3 import *
+
+lib = LeanLibrary.from_lake("path/to/project", "MyLib", build=True)
+k = Kernel(lib)
+k.init_search("")
+k.load(["Init"])
+set_kernel(k)
+
+prove(Int('x') + 0 == Int('x'))
+```
+
+**Zero-config** — `ManagedProject` creates and caches a Lake project
+under `~/.lean_py/managed/` so you never touch a lakefile:
+
+```python
+from lean_py.project import ManagedProject
+from lean_py.z3 import *
+
+mp = ManagedProject.get(deps=("batteries",))  # fetches + builds once
+set_kernel(mp.kernel())
+
+x = Int('x')
+prove(Implies(x > 0, x + 1 > 0))
+```
+
+`ManagedProject` pins dependencies to your active Lean toolchain version
+(e.g. `batteries@v4.29.1` for `leanprover/lean4:v4.29.1`). Supported
+well-known packages: `batteries`, `mathlib`, `aesop`, `proofwidgets`.
+Pass any other name and it will be added as a bare `[[require]]` entry —
+you'll need to specify the git source yourself. For example, to use a
+custom package `MyMathUtils`:
+
+```python
+mp = ManagedProject.get(deps=("batteries", "MyMathUtils"))
+```
+
+This generates a `lakefile.toml` with:
+
+```toml
+[[require]]
+name = "batteries"
+git  = "https://github.com/leanprover-community/batteries"
+rev  = "v4.29.1"
+
+[[require]]
+name = "MyMathUtils"
+```
+
+You'd then edit `~/.lean_py/managed/<hash>/lakefile.toml` to add the
+git source for `MyMathUtils` before the first build:
+
+```toml
+[[require]]
+name = "MyMathUtils"
+git  = "https://github.com/yourorg/my-math-utils"
+rev  = "main"
+```
+
 ## Bidirectional introspection
 
 Lean's kernel ADTs (`Lean.Expr`, `Lean.Name`, `Lean.Level`,
@@ -244,6 +357,8 @@ examples/
   03_numpy_typed/       numpy with Lean-checked dependent shapes
   04_sympy_tactic/      `by sympy` — Lean tactic backed by SymPy via Expr trees
   05_knuckledragger/    `by knuckle` — Lean tactic backed by Z3 via Expr trees
+  06_effectful_verifier/ side-effectful programs with verified pre/post specs
+  07_z3py_drop_in/      z3py vocabulary backed by Lean's grind (no Z3 needed)
 ```
 
 Each is a self-contained Lake + uv project.
@@ -299,6 +414,8 @@ lean_py/
   _runtime.py            dynamic ctypes FFI from lean.h
   _parse.py              lean.h parser (pycparser)
   utils.py               toolchain helpers
+  project.py             ManagedProject (zero-config Lake projects)
+  z3/                    z3py-compatible prover (core AST + solver)
 
 examples/                self-contained demos
 tests/                   125-test suite

@@ -22,6 +22,7 @@ All marshalling routines operate over the dynamic FFI built in `_runtime`.
 from __future__ import annotations
 
 import ctypes
+import struct as _struct
 from ctypes import (
     POINTER, c_char_p, c_double, c_int8, c_int16, c_int32, c_int64,
     c_size_t, c_uint8, c_uint16, c_uint32, c_uint64, c_void_p,
@@ -109,9 +110,21 @@ def _ctor_get(ffi: Any, ptr: Any, i: int) -> Any:
 
 
 class TypeWrapper:
-    """A pair of py↔lean conversion functions for a particular `TypeRepr`."""
+    """A pair of py↔lean conversion functions for a particular `TypeRepr`.
 
-    __slots__ = ("repr", "from_lean", "to_lean", "ctype")
+    For types that can appear as inline scalar fields inside a
+    ``lean_ctor_object`` (Bool, enum inductives, UInt*, etc.), the three
+    ``ctor_scalar_*`` attributes describe how to read/write them:
+
+    - ``ctor_scalar_size``: byte width (1/2/4/8), or *None* for pointer fields.
+    - ``from_ctor_scalar(raw_int) → python_value``
+    - ``to_ctor_scalar(python_value) → raw_int``
+    """
+
+    __slots__ = (
+        "repr", "from_lean", "to_lean", "ctype",
+        "ctor_scalar_size", "from_ctor_scalar", "to_ctor_scalar",
+    )
 
     def __init__(
         self,
@@ -119,11 +132,18 @@ class TypeWrapper:
         from_lean: Callable[[Any], Any],
         to_lean: Callable[[Any], Any],
         ctype: Any,
+        *,
+        ctor_scalar_size: int | None = None,
+        from_ctor_scalar: Callable[[int], Any] | None = None,
+        to_ctor_scalar: Callable[[Any], int] | None = None,
     ) -> None:
         self.repr = type_repr
         self.from_lean = from_lean
         self.to_lean = to_lean
         self.ctype = ctype
+        self.ctor_scalar_size = ctor_scalar_size
+        self.from_ctor_scalar = from_ctor_scalar
+        self.to_ctor_scalar = to_ctor_scalar
 
     def __repr__(self) -> str:
         return f"<TypeWrapper {self.repr.short()}>"
@@ -132,6 +152,10 @@ class TypeWrapper:
 def _is_enum_tag_only(ti: TypeInfo) -> bool:
     """Constructors with no payload are encoded as boxed scalars (the tag)."""
     return ti.isEnum or all(len(c.fields) == 0 for c in ti.ctors)
+
+
+# Size in bytes of a pointer on this platform.
+_PTR_SIZE = ctypes.sizeof(c_void_p)
 
 
 # ----------------------------------------------------------------------------
@@ -153,7 +177,14 @@ class _CtorMeta(type):
             raise TypeError(
                 f"{cls._type_name}.{cls._ctor_name} expects {n_fields} args, "
                 f"got {len(args)}")
-        return LeanInductiveValue(cls._type_name, cls._ctor_name, cls._tag, tuple(args))
+        # Convert zero-arg _CtorMeta sentinels to LeanInductiveValue so that
+        # all tree nodes are uniformly LeanInductiveValue for pattern matching.
+        converted = tuple(
+            LeanInductiveValue(a._type_name, a._ctor_name, a._tag, ())
+            if type(a) is _CtorMeta else a
+            for a in args
+        )
+        return LeanInductiveValue(cls._type_name, cls._ctor_name, cls._tag, converted)
 
     def __instancecheck__(cls, instance):
         if isinstance(instance, LeanInductiveValue):
@@ -199,6 +230,7 @@ class LeanInductiveValue:
     """
 
     __slots__ = ("ctor", "tag", "fields", "_type_name")
+    __match_args__ = ("ctor", "tag", "fields")
 
     def __init__(self, type_name: str, ctor: str, tag: int, fields: tuple) -> None:
         self._type_name = type_name
@@ -226,8 +258,8 @@ class LeanInductiveValue:
                 other._type_name, other.tag, other.fields,
             )
         if type(other) is _CtorMeta:
-            return (self._type_name == other._type_name
-                    and self.ctor == other._ctor_name
+            return (self._type_name == other._type_name  # type: ignore[attr-defined]
+                    and self.ctor == other._ctor_name  # type: ignore[attr-defined]
                     and self.fields == ())
         return NotImplemented
 
@@ -331,7 +363,7 @@ def _build_smart_ctors(ffi) -> dict[tuple[str, str], Callable]:
         if fn is None:
             continue
 
-        def _mk(ffi, ObjPtr, ch, _fn=fn, _n=nargs, _st=scalar_tail):
+        def _mk(ffi, ObjPtr, ch, _fn=fn, _n=nargs, _st=scalar_tail):  # type: ignore[misc]
             c_args = []
             for i, c in enumerate(ch[:_n]):
                 if _st and i == _n - 1:
@@ -368,8 +400,9 @@ class Marshaller:
     # -- helpers -------------------------------------------------------------
 
     def _key(self, t: TypeRepr) -> str:
-        # Stable key for caching — based on the json-style structural form.
-        return repr(t)
+        # Stable key for caching.  Include ``kind`` so that e.g.
+        # ``named:Lean.Expr`` doesn't collide with ``opaque:Lean.Expr``.
+        return f"{t.kind}:{repr(t)}"
 
     def _lean_string_to_py(self, ptr: Any) -> str:
         """Decode a Lean string object pointer into a Python str."""
@@ -408,8 +441,53 @@ class Marshaller:
             self.ffi.lean_array_set_core(arr, i, child)
         return arr
 
+    def _ctor_field_layout(self, ctor: CtorInfo):
+        """Compute the ABI memory layout for a constructor's fields.
+
+        Uses each field wrapper's ``ctor_scalar_size`` to classify fields
+        as pointer (``None``) or inline scalar.
+
+        Returns ``(obj_indices, scalar_plan, total_scalar_bytes)`` where:
+        - *obj_indices*: declaration-order indices of pointer fields.
+        - *scalar_plan*: ``[(decl_index, byte_offset, byte_size), ...]``
+          sorted by the Lean ABI rule (decreasing size, declaration order
+          within each size group).  *byte_offset* is relative to the
+          scalar region start.
+        - *total_scalar_bytes*: total bytes for ``lean_alloc_ctor``.
+        """
+        obj_indices: list[int] = []
+        scalars: list[tuple[int, int]] = []  # (decl_index, byte_size)
+        for i, ft in enumerate(ctor.fields):
+            sz = self.wrapper_for(ft).ctor_scalar_size
+            if sz is None:
+                obj_indices.append(i)
+            else:
+                scalars.append((i, sz))
+        # ABI: scalar fields sorted by decreasing size; stable sort
+        # preserves declaration order within each size group.
+        scalars.sort(key=lambda x: -x[1])
+        byte_off = 0
+        scalar_plan: list[tuple[int, int, int]] = []
+        for decl_idx, sz in scalars:
+            scalar_plan.append((decl_idx, byte_off, sz))
+            byte_off += sz
+        return obj_indices, scalar_plan, byte_off
+
+    # Scalar read/write helpers keyed by byte size.
+    _SCALAR_GETTERS = {
+        1: "lean_ctor_get_uint8",
+        2: "lean_ctor_get_uint16",
+        4: "lean_ctor_get_uint32",
+        8: "lean_ctor_get_uint64",
+    }
+    _SCALAR_SETTERS = {
+        1: "lean_ctor_set_uint8",
+        2: "lean_ctor_set_uint16",
+        4: "lean_ctor_set_uint32",
+        8: "lean_ctor_set_uint64",
+    }
+
     def _decode_inductive(self, ti: TypeInfo, ptr: Any) -> LeanInductiveValue:
-        # Determine the constructor.
         tag = _ctor_tag(self.ffi, ptr)
         ctor = next((c for c in ti.ctors if c.tag == tag), None)
         if ctor is None:
@@ -417,23 +495,37 @@ class Marshaller:
                 f"unknown ctor tag {tag} for {ti.name}; expected one of "
                 f"{[(c.tag, c.name) for c in ti.ctors]}"
             )
-        # Decode fields.
         if not ctor.fields:
             return LeanInductiveValue(ti.name, ctor.name, tag, ())
-        fields = []
-        for i, ftype in enumerate(ctor.fields):
-            fwrap = self.wrapper_for(ftype)
-            child = _ctor_get(self.ffi, ptr, i)
+
+        obj_indices, scalar_plan, _ = self._ctor_field_layout(ctor)
+        num_objs = len(obj_indices)
+        decoded: dict[int, Any] = {}
+
+        # Pointer fields.
+        for obj_pos, decl_idx in enumerate(obj_indices):
+            fwrap = self.wrapper_for(ctor.fields[decl_idx])
+            child = _ctor_get(self.ffi, ptr, obj_pos)
             self.ffi.lean_inc(child)
-            fields.append(fwrap.from_lean(child))
-        return LeanInductiveValue(ti.name, ctor.name, tag, tuple(fields))
+            decoded[decl_idx] = fwrap.from_lean(child)
+
+        # Scalar fields — use each wrapper's from_ctor_scalar.
+        scalar_base = num_objs * _PTR_SIZE
+        for decl_idx, byte_off, byte_sz in scalar_plan:
+            fwrap = self.wrapper_for(ctor.fields[decl_idx])
+            getter = getattr(self.ffi, self._SCALAR_GETTERS[byte_sz])
+            raw = getter(ptr, scalar_base + byte_off)
+            decoded[decl_idx] = fwrap.from_ctor_scalar(raw)  # type: ignore[misc]
+
+        fields = tuple(decoded[i] for i in range(len(ctor.fields)))
+        return LeanInductiveValue(ti.name, ctor.name, tag, fields)
 
     def _encode_inductive(self, ti: TypeInfo, value: Any) -> Any:
         # Accept LeanInductiveValue, _CtorMeta classes, or (ctor_name, *args) tuple.
         if type(value) is _CtorMeta:
-            ctor = next((c for c in ti.ctors if c.name == value._ctor_name), None)
+            ctor = next((c for c in ti.ctors if c.name == value._ctor_name), None)  # type: ignore[attr-defined]
             if ctor is None:
-                raise ValueError(f"unknown ctor {value._ctor_name} for {ti.name}")
+                raise ValueError(f"unknown ctor {value._ctor_name} for {ti.name}")  # type: ignore[attr-defined]
             field_values = ()
         elif isinstance(value, LeanInductiveValue):
             ctor = next((c for c in ti.ctors if c.name == value.ctor), None)
@@ -459,23 +551,34 @@ class Marshaller:
                 return smart(self.ffi, self._lean_object_ptr, [])
             return self.ffi.lean_box(ctor.tag)
 
-        # Encode child values first (each returns an owned pointer).
-        children = []
-        for ftype, fv in zip(ctor.fields, field_values):
-            fwrap = self.wrapper_for(ftype)
-            children.append(fwrap.to_lean(fv))
-
-        # If a smart constructor exists, use it (handles internal scalar
-        # fields like Name hashes and Expr Data).  The smart ctor borrows
-        # the children and decrements them; it returns an owned result.
+        # If a smart constructor exists, encode children for it and call.
         smart = self._smart_ctors.get((ti.name, ctor.name))
         if smart is not None:
+            children = []
+            for ftype, fv in zip(ctor.fields, field_values):  # type: ignore[var-annotated]
+                fwrap = self.wrapper_for(ftype)
+                children.append(fwrap.to_lean(fv))
             return smart(self.ffi, self._lean_object_ptr, children)
 
-        # Default: allocate a plain ctor object.
-        obj = self.ffi.lean_alloc_ctor(ctor.tag, len(ctor.fields), 0)
-        for i, child in enumerate(children):
-            self.ffi.lean_ctor_set(obj, i, child)
+        # Default: allocate a ctor with the correct scalar layout.
+        obj_indices, scalar_plan, scalar_sz = self._ctor_field_layout(ctor)
+        num_objs = len(obj_indices)
+        obj = self.ffi.lean_alloc_ctor(ctor.tag, num_objs, scalar_sz)
+
+        # Pointer fields.
+        for obj_pos, decl_idx in enumerate(obj_indices):
+            fwrap = self.wrapper_for(ctor.fields[decl_idx])
+            child = fwrap.to_lean(field_values[decl_idx])
+            self.ffi.lean_ctor_set(obj, obj_pos, child)
+
+        # Scalar fields — use each wrapper's to_ctor_scalar.
+        scalar_base = num_objs * _PTR_SIZE
+        for decl_idx, byte_off, byte_sz in scalar_plan:
+            fwrap = self.wrapper_for(ctor.fields[decl_idx])
+            raw = fwrap.to_ctor_scalar(field_values[decl_idx])  # type: ignore[misc]
+            setter = getattr(self.ffi, self._SCALAR_SETTERS[byte_sz])
+            setter(obj, scalar_base + byte_off, raw)
+
         return obj
 
     # -- public --------------------------------------------------------------
@@ -521,7 +624,10 @@ class Marshaller:
                 return _ctor_tag(ffi, p) == 1
             def to_lean(b):
                 return ffi.lean_box(1 if b else 0)
-            return TypeWrapper(t, from_lean, to_lean, c_uint8)
+            return TypeWrapper(t, from_lean, to_lean, c_uint8,
+                               ctor_scalar_size=1,
+                               from_ctor_scalar=lambda raw: raw == 1,
+                               to_ctor_scalar=lambda b: 1 if b else 0)
 
         if k == "nat":
             # Small values are boxed scalars; use lean_uint64_of_nat at the FFI level.
@@ -567,17 +673,35 @@ class Marshaller:
                 return v
             def to_lean(f):
                 return ffi.lean_box_float(c_double(f).value)
-            return TypeWrapper(t, from_lean, to_lean, c_double)
+            return TypeWrapper(
+                t, from_lean, to_lean, c_double,
+                ctor_scalar_size=8,
+                from_ctor_scalar=lambda raw: _struct.unpack('d', _struct.pack('Q', raw))[0],
+                to_ctor_scalar=lambda f: _struct.unpack('Q', _struct.pack('d', float(f)))[0],
+            )
 
         if k == "uint":
             bits = t.bits or 64
+            byte_sz = bits // 8
             ct = {8: c_uint8, 16: c_uint16, 32: c_uint32, 64: c_uint64}[bits]
-            return TypeWrapper(t, lambda v: int(v), lambda v: ct(int(v)).value, ct)
+            return TypeWrapper(
+                t, lambda v: int(v), lambda v: ct(int(v)).value, ct,
+                ctor_scalar_size=byte_sz,
+                from_ctor_scalar=lambda raw: int(raw),
+                to_ctor_scalar=lambda v, _ct=ct: _ct(int(v)).value,  # type: ignore[misc,return-value]
+            )
 
         if k == "sint":
             bits = t.bits or 64
+            byte_sz = bits // 8
             ct = {8: c_int8, 16: c_int16, 32: c_int32, 64: c_int64}[bits]
-            return TypeWrapper(t, lambda v: int(v), lambda v: ct(int(v)).value, ct)
+            uct = {8: c_uint8, 16: c_uint16, 32: c_uint32, 64: c_uint64}[bits]
+            return TypeWrapper(
+                t, lambda v: int(v), lambda v: ct(int(v)).value, ct,
+                ctor_scalar_size=byte_sz,
+                from_ctor_scalar=lambda raw, _ct=ct: int(_ct(raw).value),  # type: ignore[misc,return-value]
+                to_ctor_scalar=lambda v, _uct=uct, _ct=ct: _uct(_ct(int(v)).value).value,  # type: ignore[misc,return-value]
+            )
 
         if k == "char":
             # Char is a UInt32 codepoint at the runtime ABI.
@@ -591,7 +715,12 @@ class Marshaller:
                 if isinstance(c, str) and len(c) == 1:
                     c = ord(c)
                 return ffi.lean_box(int(c))
-            return TypeWrapper(t, from_lean, to_lean, c_uint32)
+            return TypeWrapper(
+                t, from_lean, to_lean, c_uint32,
+                ctor_scalar_size=4,
+                from_ctor_scalar=lambda raw: chr(raw),
+                to_ctor_scalar=lambda c: ord(c) if isinstance(c, str) else int(c),
+            )
 
         if k == "array":
             inner = self.wrapper_for(t.elem)  # type: ignore[arg-type]
@@ -702,29 +831,26 @@ class Marshaller:
             ti = self.registry.find_type(t.name or "")
             if ti is None:
                 return self._opaque_wrapper(t)
-            # Enum-like inductives (all ctors are nullary) are unboxed
-            # by the Lean compiler and passed across the C ABI as a small
-            # unsigned integer (typically `uint8_t` if there are ≤ 256
-            # ctors). Mirror that ABI on the Python side.
-            is_enum = all(len(c.fields) == 0 for c in ti.ctors)
-            if is_enum and len(ti.ctors) <= 256:
-                # The Lean compiler unboxes payload-free inductives. At the
-                # top-level C ABI a value-typed `MyEnum` parameter/return is
-                # `uint8_t`; when nested as a `lean_object*` field of an
-                # outer ctor it is a boxed scalar `(tag << 1) | 1`. The
-                # wrapper produces both forms and the call-site picks the
-                # right one based on `ctype`.
-                def from_lean(tag):
+            is_enum = _is_enum_tag_only(ti)
+            if is_enum:
+                n_ctors = len(ti.ctors)
+                if n_ctors <= 256:
+                    scalar_sz, ct = 1, c_uint8
+                elif n_ctors <= 65536:
+                    scalar_sz, ct = 2, c_uint16
+                else:
+                    scalar_sz, ct = 4, c_uint32
+                def from_lean(tag, _ti=ti):  # type: ignore[misc]
                     if isinstance(tag, int):
                         n = tag
                     elif ffi.lean_is_scalar(tag):
                         n = ffi.lean_unbox(tag)
                     else:
                         n = ffi.lean_ptr_tag(tag)
-                    ctor = next((c for c in ti.ctors if c.tag == n), None)
+                    ctor = next((c for c in _ti.ctors if c.tag == n), None)
                     if ctor is None:
-                        raise RuntimeError(f"unknown {ti.name} tag {n}")
-                    return LeanInductiveValue(ti.name, ctor.name, n, ())
+                        raise RuntimeError(f"unknown {_ti.name} tag {n}")
+                    return LeanInductiveValue(_ti.name, ctor.name, n, ())
                 def to_lean(v):
                     if isinstance(v, LeanInductiveValue):
                         return ffi.lean_box(v.tag)
@@ -733,7 +859,25 @@ class Marshaller:
                     if isinstance(v, int):
                         return ffi.lean_box(v)
                     raise TypeError(f"cannot encode {v!r} as enum {ti.name}")
-                return TypeWrapper(t, from_lean, to_lean, c_uint8)
+                def _from_scalar(raw, _ti=ti):
+                    ctor = next((c for c in _ti.ctors if c.tag == raw), None)
+                    if ctor is None:
+                        raise RuntimeError(f"unknown {_ti.name} tag {raw}")
+                    return LeanInductiveValue(_ti.name, ctor.name, raw, ())
+                def _to_scalar(v):
+                    if isinstance(v, LeanInductiveValue):
+                        return v.tag
+                    if type(v) is _CtorMeta:
+                        return v._tag
+                    if isinstance(v, int):
+                        return v
+                    raise TypeError(f"cannot encode {v!r} as enum scalar")
+                return TypeWrapper(
+                    t, from_lean, to_lean, ct,
+                    ctor_scalar_size=scalar_sz,
+                    from_ctor_scalar=_from_scalar,
+                    to_ctor_scalar=_to_scalar,
+                )
             def from_lean(p):
                 v = self._decode_inductive(ti, p)
                 ffi.lean_dec(p)

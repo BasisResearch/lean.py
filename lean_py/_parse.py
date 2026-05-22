@@ -228,7 +228,7 @@ def _extract_struct(node: c_ast.Struct) -> StructDef | None:
 
 
 def _extract_func_params(func_decl: c_ast.FuncDecl) -> tuple[list[FuncParam], bool]:
-    params = []
+    params: list[FuncParam] = []
     is_variadic = False
     if func_decl.args is None:
         return params, False
