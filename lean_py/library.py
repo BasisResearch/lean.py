@@ -28,6 +28,7 @@ from ctypes import POINTER, c_uint8, c_void_p
 from pathlib import Path
 from typing import Any, Callable
 
+from lean_py._runtime import get_structs
 from lean_py.base_types import LeanObject
 from lean_py.lean_ffi import get_lean_ffi
 from lean_py.marshal import LeanInductiveValue, Marshaller, TypeWrapper, _CtorMeta
@@ -46,7 +47,9 @@ def _list_init_symbols(dylib: Path) -> list[str]:
     try:
         out = subprocess.run(
             ["nm", "-gj", str(dylib)],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout
     except (FileNotFoundError, subprocess.CalledProcessError):
         return []
@@ -56,8 +59,11 @@ def _list_init_symbols(dylib: Path) -> list[str]:
         # macOS prefixes exported symbols with `_`; strip that.
         if sym.startswith("_"):
             sym = sym[1:]
-        if sym.startswith("initialize_") and "Lean_" not in sym \
-                and "LeanPy_" not in sym:
+        if (
+            sym.startswith("initialize_")
+            and "Lean_" not in sym
+            and "LeanPy_" not in sym
+        ):
             candidates.append(sym)
     return candidates
 
@@ -77,7 +83,9 @@ def _ensure_rpath(dylib: Path) -> None:
     try:
         out = subprocess.run(
             ["otool", "-L", str(dylib)],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout
     except (FileNotFoundError, subprocess.CalledProcessError):
         return
@@ -88,14 +96,15 @@ def _ensure_rpath(dylib: Path) -> None:
             continue
         # Form: "@rpath/libFoo.dylib (compatibility version ...)"
         ref = line.split(" ", 1)[0]
-        leaf = ref[len("@rpath/"):]
+        leaf = ref[len("@rpath/") :]
         candidate = libdir / leaf
         if not candidate.exists():
             continue
         try:
             subprocess.run(
                 ["install_name_tool", "-change", ref, str(candidate), str(dylib)],
-                check=True, capture_output=True,
+                check=True,
+                capture_output=True,
             )
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass
@@ -135,14 +144,14 @@ class _InductiveType:
             match_args = tuple(f"_{i}" for i in range(n_fields))
 
             attrs = {
-                '_ctor_name': ctor.name,
-                '_type_name': ti.name,
-                '_tag': ctor.tag,
-                '__match_args__': match_args,
+                "_ctor_name": ctor.name,
+                "_type_name": ti.name,
+                "_tag": ctor.tag,
+                "__match_args__": match_args,
                 # Backward compat for nullary ctors used as values:
-                'ctor': ctor.name,
-                'tag': ctor.tag,
-                'fields': (),
+                "ctor": ctor.name,
+                "tag": ctor.tag,
+                "fields": (),
             }
             cls = _CtorMeta(ctor.name, (), attrs)
             setattr(self, ctor.name, cls)
@@ -231,14 +240,11 @@ def _build_callable(
 
     # If the return is a pointer, we need to cast it back to LeanObjectPtr
     # before handing it to the unmarshaller.
-    from lean_py._runtime import get_structs
     LObjPtr = get_structs()["_LeanObjectPtr"]
-    return_is_pointer = (
-        isinstance(rwrap.ctype, type)
-        and issubclass(rwrap.ctype, ctypes._Pointer)
+    return_is_pointer = isinstance(rwrap.ctype, type) and issubclass(
+        rwrap.ctype, ctypes._Pointer
     )
 
-    from lean_py.lean_ffi import get_lean_ffi
     _ffi = get_lean_ffi()
 
     def _wrapper(*args):
@@ -322,9 +328,9 @@ class LeanLibrary:
             if not build_root.is_dir():
                 return None
             patterns = [
-                f"lib{name}{ext}",         # old layout
-                f"lib*_{name}{ext}",       # new: lib<pkg>_<name>.<ext>
-                f"lib{name}_*{ext}",       # mirror
+                f"lib{name}{ext}",  # old layout
+                f"lib*_{name}{ext}",  # new: lib<pkg>_<name>.<ext>
+                f"lib{name}_*{ext}",  # mirror
             ]
             # Quick path: standard lib_dir, exact name.
             primary = lib_dir / f"lib{name}{ext}"
@@ -354,8 +360,9 @@ class LeanLibrary:
                 # Some Lake versions don't honour `defaultFacets = ["shared"]`
                 # in lakefile.toml; ask for the shared facet explicitly.
                 try:
-                    run_command(["lake", "build", f"{library_name}:shared"],
-                                cwd=lake_path)
+                    run_command(
+                        ["lake", "build", f"{library_name}:shared"], cwd=lake_path
+                    )
                 except Exception:
                     pass
                 found = _find(library_name)
@@ -370,9 +377,9 @@ class LeanLibrary:
         shared = []
         if build_root.is_dir():
             shared = [
-                p for p in build_root.rglob(f"lib*{ext}")
-                if p.suffix == ext
-                and not p.name.endswith((".hash", ".trace", ".rsp"))
+                p
+                for p in build_root.rglob(f"lib*{ext}")
+                if p.suffix == ext and not p.name.endswith((".hash", ".trace", ".rsp"))
             ]
         if not shared:
             raise FileNotFoundError(
@@ -418,9 +425,11 @@ class LeanLibrary:
         self._types: dict[str, _InductiveType] = {}
 
         for ti in self.registry.types:
-            wrapper = _StructureType(ti, self.marshaller) \
-                if len(ti.ctors) == 1 \
+            wrapper = (
+                _StructureType(ti, self.marshaller)
+                if len(ti.ctors) == 1
                 else _InductiveType(ti, self.marshaller)
+            )
             short = ti.name.split(".")[-1]
             self._types[short] = wrapper
             setattr(self, short, wrapper)

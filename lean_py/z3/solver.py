@@ -18,8 +18,10 @@ Typical usage::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from lean_py.kernel import Kernel
+from lean_py.project import ManagedProject
 from lean_py.z3._ast import (
     ASTNode,
     ASTSort,
@@ -94,14 +96,10 @@ from lean_py.z3.core import (
     FuncDeclRef,
     Implies,
     Not,
-    _DatatypeBuilder,
     _ast_repr,
 )
 from lean_py.z3.smt2 import parse_smt2_file as _parse_smt2_file_impl
 from lean_py.z3.smt2 import parse_smt2_string as _parse_smt2_string_impl
-
-if TYPE_CHECKING:
-    from lean_py.kernel import Kernel
 
 # ---------------------------------------------------------------------------
 # CheckSatResult
@@ -151,9 +149,6 @@ def _get_kernel() -> Kernel:
     global _kernel
     if _kernel is not None:
         return _kernel
-    # Lazy init via ManagedProject
-    from lean_py.project import ManagedProject
-
     mp = ManagedProject.get()
     _kernel = mp.kernel()
     return _kernel
@@ -397,36 +392,6 @@ def _var_sort_key(var: tuple[str, ASTSort]) -> tuple[int, str]:
     if isinstance(sort, ArrowASTSort):
         return (1, name)
     return (2, name)
-
-
-# ---------------------------------------------------------------------------
-# Inductive type registration
-# ---------------------------------------------------------------------------
-
-
-def _register_inductive(name: str, ctors: list) -> None:
-    """Register a Lean inductive type in the kernel environment."""
-    k = _get_kernel()
-    lib = k._lib
-
-    lean_ctors = []
-    for ctor_name, fields in ctors:
-        lean_fields = []
-        for f_name, f_sort in fields:
-            if isinstance(f_sort, _DatatypeBuilder):
-                lean_fields.append(
-                    lib.Z3CtorField(
-                        f_name, _marshal_sort(lib, InductiveASTSort(f_sort._name))
-                    )
-                )
-            else:
-                lean_fields.append(
-                    lib.Z3CtorField(f_name, _marshal_sort(lib, f_sort._ast_sort))
-                )
-        lean_ctors.append(lib.Z3CtorDesc(ctor_name, lean_fields))
-
-    desc = lib.Z3InductiveDesc(name, lean_ctors)
-    lib.z3_add_inductive(desc)
 
 
 # ---------------------------------------------------------------------------

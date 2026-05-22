@@ -18,6 +18,7 @@ from decimal import Decimal, getcontext
 from fractions import Fraction
 from typing import Any, Sequence
 
+from lean_py.z3._inductive_reg import _register_inductive
 from lean_py.z3._ast import (
     ASTNode,
     ASTSort,
@@ -1214,8 +1215,6 @@ class _DatatypeBuilder:
         self._ctors.append((ctor_name, tuple(fields)))
 
     def create(self) -> DatatypeSortRef:
-        from lean_py.z3.solver import _register_inductive
-
         _register_inductive(self._name, self._ctors)
 
         sort = DatatypeSortRef(InductiveASTSort(self._name), self._name, self._ctors)

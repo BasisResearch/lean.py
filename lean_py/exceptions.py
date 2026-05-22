@@ -39,8 +39,7 @@ class LeanError(RuntimeError):
 
     __slots__ = ("kind", "message", "context")
 
-    def __init__(self, kind: str, message: str,
-                 context: dict | None = None) -> None:
+    def __init__(self, kind: str, message: str, context: dict | None = None) -> None:
         self.kind = kind
         self.message = message
         self.context = context or {}
@@ -97,7 +96,7 @@ def parse_io_error_message(raw: str) -> tuple[str, str]:
         return "", raw
     if not typename[0].isupper():
         return "", raw
-    return typename, raw[sep + 2:]
+    return typename, raw[sep + 2 :]
 
 
 __all__ = [

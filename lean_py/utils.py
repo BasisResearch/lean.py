@@ -14,9 +14,7 @@ def run_command(args: list[str], **kwargs) -> str:
     res = subprocess.run(args, capture_output=True, **kwargs)
     if res.returncode != 0:
         stderr = res.stderr.decode(errors="replace") if res.stderr else ""
-        raise RuntimeError(
-            f"Command {args} exited with {res.returncode}: {stderr}"
-        )
+        raise RuntimeError(f"Command {args} exited with {res.returncode}: {stderr}")
     return res.stdout.decode().strip()
 
 

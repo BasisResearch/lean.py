@@ -31,6 +31,7 @@ class TypeRepr:
     - ``"pyobject"`` — the ``LeanPy.Python.Py`` opaque wrapper.
     - ``"opaque"`` — any type that lean-py cannot introspect.
     """
+
     kind: str
     # Optional fields, depending on kind
     bits: int | None = None
@@ -64,8 +65,17 @@ class TypeRepr:
     def short(self) -> str:
         """A compact pseudo-Lean rendering for diagnostics."""
         k = self.kind
-        if k in ("unit", "bool", "nat", "int", "float", "float32", "char",
-                 "string", "pyobject"):
+        if k in (
+            "unit",
+            "bool",
+            "nat",
+            "int",
+            "float",
+            "float32",
+            "char",
+            "string",
+            "pyobject",
+        ):
             return k.capitalize() if k != "string" else "String"
         if k == "uint":
             return f"UInt{self.bits}"
@@ -95,6 +105,7 @@ class CtorInfo:
         tag: Runtime integer tag (index in constructor order, starting at 0).
         fields: Tuple of :class:`TypeRepr` describing each positional field.
     """
+
     name: str
     tag: int
     fields: tuple[TypeRepr, ...]
@@ -118,6 +129,7 @@ class TypeInfo:
         isEnum: True if all constructors are nullary (enum-like).
         ctors: Constructors in declaration order.
     """
+
     name: str
     isStructure: bool
     isEnum: bool
@@ -143,6 +155,7 @@ class FuncInfo:
         params: Positional parameter types in declaration order.
         returnType: Return type (may be wrapped in ``IO``).
     """
+
     declName: str
     exportName: str
     params: tuple[TypeRepr, ...]
@@ -168,6 +181,7 @@ class LibraryRegistry:
         funcs: All ``@[python]``-annotated functions.
         types: All types registered via ``derive_python``.
     """
+
     funcs: tuple[FuncInfo, ...] = field(default_factory=tuple)
     types: tuple[TypeInfo, ...] = field(default_factory=tuple)
 

@@ -16,20 +16,22 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import TYPE_CHECKING
 
+from lean_py.kernel import Kernel
+from lean_py.library import LeanLibrary
 from lean_py.utils import lean_toolchain_version, run_command
 
-if TYPE_CHECKING:
-    from lean_py.kernel import Kernel
-    from lean_py.library import LeanLibrary
-
 _LEANPY_ROOT = Path(__file__).resolve().parent.parent
-_CACHE_ROOT = Path(os.environ.get(
-    "LEANPY_MANAGED_DIR",
-    Path.home() / ".lean_py" / "managed",
-))
+_LEANPY_GIT = "https://github.com/BasisResearch/lean.py"
+_IS_DEV = (_LEANPY_ROOT / "lakefile.lean").exists()
+_CACHE_ROOT = Path(
+    os.environ.get(
+        "LEANPY_MANAGED_DIR",
+        Path.home() / ".lean_py" / "managed",
+    )
+)
 
 # Well-known Lake packages: name -> (git, import_name, link_obj)
 # The rev is auto-matched to the active lean-toolchain version.
@@ -66,8 +68,19 @@ def _dep_rev(version: str) -> str:
     return version
 
 
+def _leanpy_version() -> str:
+    """Return the installed lean_py package version."""
+    return pkg_version("lean_py")
+
+
+def _leanpy_git_rev() -> str:
+    """Git rev for the LeanPy Lake dependency when pip-installed."""
+    return os.environ.get("LEANPY_GIT_REV", f"v{_leanpy_version()}")
+
+
 def _cache_key(lean_version: str, deps: tuple[str, ...]) -> str:
-    blob = f"{lean_version}|{','.join(sorted(deps))}|{_LEANPY_ROOT}"
+    src_id = str(_LEANPY_ROOT) if _IS_DEV else f"git:{_leanpy_git_rev()}"
+    blob = f"{lean_version}|{','.join(sorted(deps))}|{src_id}"
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
@@ -101,18 +114,15 @@ class ManagedProject:
 
     def library(self) -> LeanLibrary:
         """Build and return a :class:`LeanLibrary` for this project."""
-        from lean_py.library import LeanLibrary
-
         return LeanLibrary.from_lake(self._dir, "Managed", build=True)
 
     def kernel(self) -> Kernel:
         """Build and return a :class:`Kernel` backed by this project."""
-        from lean_py.kernel import Kernel
-
         lib = self.library()
         k = Kernel(lib)
         sp = run_command(
-            ["lake", "env", "printenv", "LEAN_PATH"], cwd=str(self._dir),
+            ["lake", "env", "printenv", "LEAN_PATH"],
+            cwd=str(self._dir),
         )
         k.init_search(sp)
         k.load(["Init", "LeanPy.Z3"])
@@ -127,7 +137,8 @@ class ManagedProject:
         if self._dir.exists():
             shutil.rmtree(self._dir)
         key = next(
-            (k for k, v in self._instances.items() if v is self), None,
+            (k for k, v in self._instances.items() if v is self),
+            None,
         )
         if key:
             del self._instances[key]
@@ -169,7 +180,13 @@ def _generate_lakefile(
         "",
         "[[require]]",
         'name = "LeanPy"',
-        f'path = "{_LEANPY_ROOT}"',
+    ]
+    if _IS_DEV:
+        lines.append(f'path = "{_LEANPY_ROOT}"')
+    else:
+        lines.append(f'git = "{_LEANPY_GIT}"')
+        lines.append(f'rev = "{_leanpy_git_rev()}"')
+    lines += [
         "",
     ]
 
@@ -193,17 +210,19 @@ def _generate_lakefile(
             _, _, link_obj = _KNOWN_DEPS[dep]
             link_objs.append(f'"{link_obj}"')
 
-    lines.extend([
-        "[[lean_lib]]",
-        'name = "Managed"',
-        "moreLinkObjs = [" + ", ".join(link_objs) + "]",
-        "precompileModules = true",
-        'defaultFacets = ["shared"]',
-        "moreLinkArgs = [",
-        '  "-Wl,-headerpad_max_install_names",',
-        "]",
-        "",
-    ])
+    lines.extend(
+        [
+            "[[lean_lib]]",
+            'name = "Managed"',
+            "moreLinkObjs = [" + ", ".join(link_objs) + "]",
+            "precompileModules = true",
+            'defaultFacets = ["shared"]',
+            "moreLinkArgs = [",
+            '  "-Wl,-headerpad_max_install_names",',
+            "]",
+            "",
+        ]
+    )
 
     return "\n".join(lines)
 
