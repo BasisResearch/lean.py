@@ -19,13 +19,13 @@ class LeanValue:
     def __init__(self, ptr):
         """
         Initialize with a Lean object pointer.
-        
+
         Args:
             ptr: Pointer to Lean object
             ffi: LeanFFI instance for managing the value
         """
         self.ptr = ptr
-        self.ffi : LeanFFI = get_lean_ffi()
+        self.ffi: LeanFFI = get_lean_ffi()
 
     def __del__(self):
         """Automatically decrement reference when Python object is garbage collected."""
@@ -40,14 +40,14 @@ class LeanString(LeanValue):
         """Convert to Python string."""
         if self.ptr is None:
             return ""
-        
+
         string_obj = ctypes.cast(self.ptr, POINTER(LeanStringObject)).contents
         if string_obj.m_size == 0:
             return ""
         m_data_start = addressof(string_obj) + LeanStringObject.m_data.offset
-        
+
         # m_data is a pointer to char, get the raw bytes
-        return ctypes.string_at(m_data_start, string_obj.m_size - 1).decode('utf-8')
+        return ctypes.string_at(m_data_start, string_obj.m_size - 1).decode("utf-8")
 
     def __str__(self):
         return self.to_python_string()
@@ -68,8 +68,10 @@ class LeanArray(LeanValue):
         """Get element at index."""
         array_obj = ctypes.cast(self.ptr, POINTER(LeanArrayObject)).contents
         if index < 0 or index >= array_obj.m_size:
-            raise IndexError(f"Index {index} out of bounds for array of size {array_obj.m_size}")
-        
+            raise IndexError(
+                f"Index {index} out of bounds for array of size {array_obj.m_size}"
+            )
+
         elem_ptr = array_obj.m_data[index]
         self.ffi.inc_ref(elem_ptr)
         return LeanValue(elem_ptr)
@@ -99,7 +101,7 @@ class LeanIOResult(LeanValue):
     def get_or_raise(self):
         """
         Get the value if Ok, or raise an exception if Error.
-        
+
         Raises:
             RuntimeError: If the result is an Error
         """
@@ -115,4 +117,3 @@ class LeanIOResult(LeanValue):
             # For Error, display and raise
             self.ffi.io_result_show_error(self.ptr)
             raise RuntimeError("Lean IO error occurred")
-

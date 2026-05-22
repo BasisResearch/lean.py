@@ -9,13 +9,31 @@ from __future__ import annotations
 import ctypes
 import functools
 from ctypes import (
-    POINTER, Structure, c_bool, c_char, c_char_p, c_double, c_float,
-    c_int, c_int8, c_int16, c_int32, c_int64, c_long, c_size_t,
-    c_ssize_t, c_uint, c_uint8, c_uint16, c_uint32, c_uint64, c_void_p,
+    POINTER,
+    Structure,
+    c_bool,
+    c_char,
+    c_char_p,
+    c_double,
+    c_float,
+    c_int,
+    c_int8,
+    c_int16,
+    c_int32,
+    c_int64,
+    c_long,
+    c_size_t,
+    c_ssize_t,
+    c_uint,
+    c_uint8,
+    c_uint16,
+    c_uint32,
+    c_uint64,
+    c_void_p,
 )
 from typing import Any
 
-from lean_py._parse import HeaderModel, StructDef, FuncDecl, get_header_model
+from lean_py._parse import HeaderModel, StructDef, get_header_model
 from lean_py.utils import all_lean_runtime_libs, find_lean_dynlib
 
 
@@ -82,8 +100,14 @@ def _resolve_type(c_type: str, structs: dict[str, type]) -> Any:
         return _TYPE_MAP[c_type]
 
     # lean_object pointer types
-    if c_type in ("lean_object *", "lean_obj_arg", "b_lean_obj_arg",
-                  "u_lean_obj_arg", "lean_obj_res", "b_lean_obj_res"):
+    if c_type in (
+        "lean_object *",
+        "lean_obj_arg",
+        "b_lean_obj_arg",
+        "u_lean_obj_arg",
+        "lean_obj_res",
+        "b_lean_obj_res",
+    ):
         return structs.get("_LeanObjectPtr", c_void_p)
 
     if c_type == "lean_object * *":
@@ -91,8 +115,12 @@ def _resolve_type(c_type: str, structs: dict[str, type]) -> Any:
         return POINTER(obj_ptr)
 
     # Known opaque pointer types
-    if c_type in ("lean_external_class *", "lean_external_finalize_proc",
-                  "lean_external_foreach_proc", "lean_task_imp *"):
+    if c_type in (
+        "lean_external_class *",
+        "lean_external_finalize_proc",
+        "lean_external_foreach_proc",
+        "lean_task_imp *",
+    ):
         return c_void_p
 
     # Pointer types
@@ -120,6 +148,7 @@ def _resolve_type(c_type: str, structs: dict[str, type]) -> Any:
 # ============================================================================
 # Dynamic struct creation
 # ============================================================================
+
 
 def _build_structs(model: HeaderModel) -> dict[str, type]:
     """Dynamically create ctypes Structure classes from the model."""
@@ -168,9 +197,9 @@ def _make_struct(sdef: StructDef, known: dict[str, type]) -> type:
 # Dynamic FFI class creation
 # ============================================================================
 
+
 def _build_ffi_class(model: HeaderModel, structs: dict[str, type]) -> type:
     """Dynamically create the LeanFFI class with all bindings."""
-    LeanObjectPtr = structs["_LeanObjectPtr"]
     constants = model.constants
 
     def __init__(self):
@@ -216,8 +245,9 @@ def _build_ffi_class(model: HeaderModel, structs: dict[str, type]) -> type:
         # init code can run with the flag still true (which is required
         # by Lean's `initialize` blocks), then flip it after.
         try:
-            self.lean_io_mark_end_initialization = \
+            self.lean_io_mark_end_initialization = (
                 self.lib.lean_io_mark_end_initialization
+            )
             self.lean_io_mark_end_initialization.argtypes = []
             self.lean_io_mark_end_initialization.restype = None
         except AttributeError:
@@ -261,7 +291,9 @@ def _build_ffi_class(model: HeaderModel, structs: dict[str, type]) -> type:
             try:
                 cfunc = getattr(lib, func.name)
                 if func.params:
-                    cfunc.argtypes = [_resolve_type(p.c_type, structs) for p in func.params]
+                    cfunc.argtypes = [
+                        _resolve_type(p.c_type, structs) for p in func.params
+                    ]
                 restype = _resolve_type(func.return_type, structs)
                 if restype is not None:
                     cfunc.restype = restype
@@ -446,7 +478,9 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         # pointer that aliases into the Lean ctor's m_objs memory. If the
         # ctor is later freed (lean_dec), an aliased pointer would become
         # stale when the Lean allocator reuses the memory.
-        elem_addr = ctypes.addressof(ctor.contents) + offset + i * ctypes.sizeof(LeanObjectPtr)
+        elem_addr = (
+            ctypes.addressof(ctor.contents) + offset + i * ctypes.sizeof(LeanObjectPtr)
+        )
         raw_val = c_void_p.from_address(elem_addr).value or 0
         return ctypes.cast(c_void_p(raw_val), LeanObjectPtr)
 
@@ -538,7 +572,9 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
     def lean_alloc_array(self, size, capacity):
         fn = self._find_leanpy_helper("leanpy_alloc_array")
         if fn is None:
-            raise RuntimeError("leanpy_alloc_array not found — leanpy_native not linked")
+            raise RuntimeError(
+                "leanpy_alloc_array not found — leanpy_native not linked"
+            )
         fn.argtypes = [c_size_t, c_size_t]
         fn.restype = LeanObjectPtr
         return fn(size, capacity)
@@ -557,7 +593,8 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         # Use the exported lean_box_uint64 if present.
         fn = getattr(self.lib, "lean_box_uint64", None)
         if fn is not None:
-            fn.argtypes = [c_uint64]; fn.restype = LeanObjectPtr
+            fn.argtypes = [c_uint64]
+            fn.restype = LeanObjectPtr
             return fn(v)
         # Fallback: scalar tagged pointer (only valid for small values).
         return self.lean_box(v)
@@ -565,7 +602,8 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
     def lean_unbox_uint64(self, o):
         fn = getattr(self.lib, "lean_unbox_uint64", None)
         if fn is not None:
-            fn.argtypes = [LeanObjectPtr]; fn.restype = c_uint64
+            fn.argtypes = [LeanObjectPtr]
+            fn.restype = c_uint64
             return fn(o)
         return self.lean_unbox(o)
 
@@ -591,7 +629,8 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         fn = getattr(self.lib, "lean_unsigned_to_nat", None)
         if fn is None:
             return self.lean_box(n)
-        fn.argtypes = [c_uint]; fn.restype = LeanObjectPtr
+        fn.argtypes = [c_uint]
+        fn.restype = LeanObjectPtr
         return fn(n)
 
     def lean_uint64_to_nat(self, n):
@@ -602,9 +641,12 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
             return self.lean_box(n)
         big = getattr(self.lib, "lean_big_uint64_to_nat", None)
         if big is not None:
-            big.argtypes = [c_uint64]; big.restype = LeanObjectPtr
+            big.argtypes = [c_uint64]
+            big.restype = LeanObjectPtr
             return big(c_uint64(n).value)
-        raise RuntimeError(f"Cannot convert uint64 {n} to Nat: lean_big_uint64_to_nat not found")
+        raise RuntimeError(
+            f"Cannot convert uint64 {n} to Nat: lean_big_uint64_to_nat not found"
+        )
 
     def lean_uint64_of_nat(self, p):
         # Inline: small scalar fast-path; large path via lean_uint64_of_big_nat.
@@ -613,7 +655,8 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         fn = getattr(self.lib, "lean_uint64_of_big_nat", None)
         if fn is None:
             raise RuntimeError("lean_uint64_of_big_nat not found and Nat is not scalar")
-        fn.argtypes = [LeanObjectPtr]; fn.restype = c_uint64
+        fn.argtypes = [LeanObjectPtr]
+        fn.restype = c_uint64
         return int(fn(p))
 
     def lean_int64_to_int(self, n):
@@ -621,7 +664,8 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         # to the static-inline `lean_int64_to_int` exactly.
         fn = self._find_leanpy_helper("leanpy_int64_to_int")
         if fn is not None:
-            fn.argtypes = [c_int64]; fn.restype = LeanObjectPtr
+            fn.argtypes = [c_int64]
+            fn.restype = LeanObjectPtr
             return fn(n)
         # Fallback (mirrors `lean.h`): encode int32-range as a scalar.
         if -(1 << 31) <= n <= (1 << 31) - 1:
@@ -629,13 +673,15 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         big = getattr(self.lib, "lean_big_int64_to_int", None)
         if big is None:
             return self.lean_box(n & ((1 << 63) - 1))
-        big.argtypes = [c_int64]; big.restype = LeanObjectPtr
+        big.argtypes = [c_int64]
+        big.restype = LeanObjectPtr
         return big(n)
 
     def lean_int64_of_int(self, p):
         fn = self._find_leanpy_helper("leanpy_int64_of_int")
         if fn is not None:
-            fn.argtypes = [LeanObjectPtr]; fn.restype = c_int64
+            fn.argtypes = [LeanObjectPtr]
+            fn.restype = c_int64
             return int(fn(p))
         if self.lean_is_scalar(p):
             return int(self.lean_scalar_to_int(p))
@@ -658,7 +704,6 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
 
 def _add_helper_methods(class_dict: dict, structs: dict):
     """Add convenience helper methods."""
-    LeanObjectPtr = structs["_LeanObjectPtr"]
 
     def mk_string(self, s):
         """Create a Lean string from a Python string."""

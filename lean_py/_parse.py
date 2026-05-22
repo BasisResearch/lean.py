@@ -17,6 +17,7 @@ import pycparser.c_ast as c_ast
 # Data model
 # ============================================================================
 
+
 @dataclass
 class StructField:
     name: str
@@ -64,6 +65,7 @@ class HeaderModel:
 # Header location
 # ============================================================================
 
+
 def find_lean_header() -> Path:
     """Locate lean.h via the active Lean toolchain.
 
@@ -76,9 +78,7 @@ def find_lean_header() -> Path:
          `lean-toolchain` file, for callers who don't have `lean` on PATH.
     """
     try:
-        prefix = subprocess.check_output(
-            ["lean", "--print-prefix"], text=True
-        ).strip()
+        prefix = subprocess.check_output(["lean", "--print-prefix"], text=True).strip()
         header = Path(prefix) / "include" / "lean" / "lean.h"
         if header.exists():
             return header
@@ -89,7 +89,15 @@ def find_lean_header() -> Path:
     if toolchain_file.exists():
         toolchain = toolchain_file.read_text().strip()
         toolchain_dir = toolchain.replace("/", "--").replace(":", "---")
-        header = Path.home() / ".elan" / "toolchains" / toolchain_dir / "include" / "lean" / "lean.h"
+        header = (
+            Path.home()
+            / ".elan"
+            / "toolchains"
+            / toolchain_dir
+            / "include"
+            / "lean"
+            / "lean.h"
+        )
         if header.exists():
             return header
 
@@ -101,6 +109,7 @@ def find_lean_header() -> Path:
 # ============================================================================
 # Extraction
 # ============================================================================
+
 
 def extract_defines(header_path: Path) -> dict[str, int]:
     """Extract integer #define constants from raw header."""
@@ -122,7 +131,8 @@ def _preprocess(header_path: Path) -> Path:
     # -D flags strip GCC/Clang constructs that pycparser can't handle
     result = subprocess.run(
         [
-            "cc", "-E",
+            "cc",
+            "-E",
             "-D__STDC_VERSION__=201112L",
             "-DNDEBUG",
             "-D__attribute__(x)=",
@@ -143,7 +153,8 @@ def _preprocess(header_path: Path) -> Path:
             f"-I{include_dir}",
             str(header_path),
         ],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         raise RuntimeError(f"C preprocessor failed: {result.stderr}")
@@ -181,6 +192,7 @@ def _preprocess(header_path: Path) -> Path:
 # ============================================================================
 # AST helpers
 # ============================================================================
+
 
 def _type_to_str(node) -> str:
     if node is None:
@@ -223,7 +235,9 @@ def _extract_struct(node: c_ast.Struct) -> StructDef | None:
         bitfield = None
         if decl.bitsize and isinstance(decl.bitsize, c_ast.Constant):
             bitfield = int(decl.bitsize.value)
-        fields.append(StructField(name=fname, c_type=ftype, is_pointer=is_ptr, bitfield=bitfield))
+        fields.append(
+            StructField(name=fname, c_type=ftype, is_pointer=is_ptr, bitfield=bitfield)
+        )
     return StructDef(name=node.name or "", fields=fields)
 
 
@@ -258,7 +272,9 @@ def _extract_export_names(header_path: Path) -> set[str]:
 
 def _extract_inline_names(header_path: Path) -> set[str]:
     text = header_path.read_text()
-    pattern = re.compile(r"static\s+inline\s+(?:LEAN_ALWAYS_INLINE\s+)?[\w\s*]+\s+(\w+)\s*\(")
+    pattern = re.compile(
+        r"static\s+inline\s+(?:LEAN_ALWAYS_INLINE\s+)?[\w\s*]+\s+(\w+)\s*\("
+    )
     return {m.group(1) for m in pattern.finditer(text)}
 
 
@@ -266,7 +282,10 @@ def _extract_inline_names(header_path: Path) -> set[str]:
 # Classification
 # ============================================================================
 
-def _classify(ast: c_ast.FileAST, defines: dict[str, int], header_path: Path) -> HeaderModel:
+
+def _classify(
+    ast: c_ast.FileAST, defines: dict[str, int], header_path: Path
+) -> HeaderModel:
     model = HeaderModel()
     model.constants = defines
 
@@ -275,14 +294,18 @@ def _classify(ast: c_ast.FileAST, defines: dict[str, int], header_path: Path) ->
 
     for node in ast.ext:
         if isinstance(node, c_ast.Typedef):
-            if isinstance(node.type, c_ast.TypeDecl) and isinstance(node.type.type, c_ast.Struct):
+            if isinstance(node.type, c_ast.TypeDecl) and isinstance(
+                node.type.type, c_ast.Struct
+            ):
                 struct = _extract_struct(node.type.type)
                 if struct:
                     struct.name = node.name
                     model.structs.append(struct)
                     continue
             typedef_type = _decl_type_to_str(node.type)
-            model.typedefs.append(TypedefDef(name=node.name, underlying_type=typedef_type))
+            model.typedefs.append(
+                TypedefDef(name=node.name, underlying_type=typedef_type)
+            )
 
         elif isinstance(node, c_ast.Decl):
             if isinstance(node.type, c_ast.FuncDecl):
@@ -290,7 +313,12 @@ def _classify(ast: c_ast.FileAST, defines: dict[str, int], header_path: Path) ->
                 ret_type = _decl_type_to_str(func_decl.type)
                 params, is_variadic = _extract_func_params(func_decl)
                 fname = node.name or ""
-                func = FuncDecl(name=fname, return_type=ret_type, params=params, is_variadic=is_variadic)
+                func = FuncDecl(
+                    name=fname,
+                    return_type=ret_type,
+                    params=params,
+                    is_variadic=is_variadic,
+                )
                 if fname in export_names:
                     model.exported_functions.append(func)
                 elif fname in inline_names:
@@ -303,7 +331,12 @@ def _classify(ast: c_ast.FileAST, defines: dict[str, int], header_path: Path) ->
                 ret_type = _decl_type_to_str(func_decl.type)
                 params, is_variadic = _extract_func_params(func_decl)
                 fname = decl.name or ""
-                func = FuncDecl(name=fname, return_type=ret_type, params=params, is_variadic=is_variadic)
+                func = FuncDecl(
+                    name=fname,
+                    return_type=ret_type,
+                    params=params,
+                    is_variadic=is_variadic,
+                )
                 if fname in inline_names:
                     model.inline_functions.append(func)
                 elif fname in export_names:
