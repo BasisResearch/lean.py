@@ -115,6 +115,7 @@ class ManagedProject:
             ["lake", "env", "printenv", "LEAN_PATH"], cwd=str(self._dir),
         )
         k.init_search(sp)
+        k.load(["Init", "LeanPy.Z3"])
         return k
 
     @property

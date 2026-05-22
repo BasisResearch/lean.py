@@ -14,3 +14,4 @@ Usage::
 
 from lean_py.z3.core import *  # noqa: F401,F403
 from lean_py.z3.solver import *  # noqa: F401,F403
+from lean_py.z3.tactic import *  # noqa: F401,F403

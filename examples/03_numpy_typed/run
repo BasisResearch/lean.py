@@ -5,5 +5,25 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
+
+# The Lean compiler runs #eval at build time, which invokes the LeanPy C
+# bridge.  We must point it at the local venv's Python so numpy is available.
+# Clear stale Python env vars before resolving.
+unset VIRTUAL_ENV PYTHONHOME PYTHONPATH 2>/dev/null || true
+VENV_PY="$(pwd)/.venv/bin/python3"
+
+# Resolve both values in one shot before exporting (avoid PYTHONHOME
+# contaminating the second resolution command).
+read -r PY_HOME PY_LIB PY_SITE < <("$VENV_PY" -c '
+import sys, sysconfig, site
+libdir = sysconfig.get_config_var("LIBDIR")
+ldlib  = sysconfig.get_config_var("LDLIBRARY")
+sp     = site.getsitepackages()[0]
+print(sys.base_prefix, libdir + "/" + ldlib, sp)
+')
+export PYTHONHOME="$PY_HOME"
+export LEANPY_LIBPYTHON="$PY_LIB"
+export PYTHONPATH="$PY_SITE"
+
 (cd lean && lake build)
 exec uv run -- ./lean/.lake/build/bin/demo "$@"

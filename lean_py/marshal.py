@@ -177,7 +177,14 @@ class _CtorMeta(type):
             raise TypeError(
                 f"{cls._type_name}.{cls._ctor_name} expects {n_fields} args, "
                 f"got {len(args)}")
-        return LeanInductiveValue(cls._type_name, cls._ctor_name, cls._tag, tuple(args))
+        # Convert zero-arg _CtorMeta sentinels to LeanInductiveValue so that
+        # all tree nodes are uniformly LeanInductiveValue for pattern matching.
+        converted = tuple(
+            LeanInductiveValue(a._type_name, a._ctor_name, a._tag, ())
+            if type(a) is _CtorMeta else a
+            for a in args
+        )
+        return LeanInductiveValue(cls._type_name, cls._ctor_name, cls._tag, converted)
 
     def __instancecheck__(cls, instance):
         if isinstance(instance, LeanInductiveValue):
@@ -223,6 +230,7 @@ class LeanInductiveValue:
     """
 
     __slots__ = ("ctor", "tag", "fields", "_type_name")
+    __match_args__ = ("ctor", "tag", "fields")
 
     def __init__(self, type_name: str, ctor: str, tag: int, fields: tuple) -> None:
         self._type_name = type_name
@@ -250,8 +258,8 @@ class LeanInductiveValue:
                 other._type_name, other.tag, other.fields,
             )
         if type(other) is _CtorMeta:
-            return (self._type_name == other._type_name
-                    and self.ctor == other._ctor_name
+            return (self._type_name == other._type_name  # type: ignore[attr-defined]
+                    and self.ctor == other._ctor_name  # type: ignore[attr-defined]
                     and self.fields == ())
         return NotImplemented
 
@@ -355,7 +363,7 @@ def _build_smart_ctors(ffi) -> dict[tuple[str, str], Callable]:
         if fn is None:
             continue
 
-        def _mk(ffi, ObjPtr, ch, _fn=fn, _n=nargs, _st=scalar_tail):
+        def _mk(ffi, ObjPtr, ch, _fn=fn, _n=nargs, _st=scalar_tail):  # type: ignore[misc]
             c_args = []
             for i, c in enumerate(ch[:_n]):
                 if _st and i == _n - 1:
@@ -507,7 +515,7 @@ class Marshaller:
             fwrap = self.wrapper_for(ctor.fields[decl_idx])
             getter = getattr(self.ffi, self._SCALAR_GETTERS[byte_sz])
             raw = getter(ptr, scalar_base + byte_off)
-            decoded[decl_idx] = fwrap.from_ctor_scalar(raw)
+            decoded[decl_idx] = fwrap.from_ctor_scalar(raw)  # type: ignore[misc]
 
         fields = tuple(decoded[i] for i in range(len(ctor.fields)))
         return LeanInductiveValue(ti.name, ctor.name, tag, fields)
@@ -515,9 +523,9 @@ class Marshaller:
     def _encode_inductive(self, ti: TypeInfo, value: Any) -> Any:
         # Accept LeanInductiveValue, _CtorMeta classes, or (ctor_name, *args) tuple.
         if type(value) is _CtorMeta:
-            ctor = next((c for c in ti.ctors if c.name == value._ctor_name), None)
+            ctor = next((c for c in ti.ctors if c.name == value._ctor_name), None)  # type: ignore[attr-defined]
             if ctor is None:
-                raise ValueError(f"unknown ctor {value._ctor_name} for {ti.name}")
+                raise ValueError(f"unknown ctor {value._ctor_name} for {ti.name}")  # type: ignore[attr-defined]
             field_values = ()
         elif isinstance(value, LeanInductiveValue):
             ctor = next((c for c in ti.ctors if c.name == value.ctor), None)
@@ -547,7 +555,7 @@ class Marshaller:
         smart = self._smart_ctors.get((ti.name, ctor.name))
         if smart is not None:
             children = []
-            for ftype, fv in zip(ctor.fields, field_values):
+            for ftype, fv in zip(ctor.fields, field_values):  # type: ignore[var-annotated]
                 fwrap = self.wrapper_for(ftype)
                 children.append(fwrap.to_lean(fv))
             return smart(self.ffi, self._lean_object_ptr, children)
@@ -567,7 +575,7 @@ class Marshaller:
         scalar_base = num_objs * _PTR_SIZE
         for decl_idx, byte_off, byte_sz in scalar_plan:
             fwrap = self.wrapper_for(ctor.fields[decl_idx])
-            raw = fwrap.to_ctor_scalar(field_values[decl_idx])
+            raw = fwrap.to_ctor_scalar(field_values[decl_idx])  # type: ignore[misc]
             setter = getattr(self.ffi, self._SCALAR_SETTERS[byte_sz])
             setter(obj, scalar_base + byte_off, raw)
 
@@ -680,7 +688,7 @@ class Marshaller:
                 t, lambda v: int(v), lambda v: ct(int(v)).value, ct,
                 ctor_scalar_size=byte_sz,
                 from_ctor_scalar=lambda raw: int(raw),
-                to_ctor_scalar=lambda v, _ct=ct: _ct(int(v)).value,
+                to_ctor_scalar=lambda v, _ct=ct: _ct(int(v)).value,  # type: ignore[misc,return-value]
             )
 
         if k == "sint":
@@ -691,8 +699,8 @@ class Marshaller:
             return TypeWrapper(
                 t, lambda v: int(v), lambda v: ct(int(v)).value, ct,
                 ctor_scalar_size=byte_sz,
-                from_ctor_scalar=lambda raw, _ct=ct: int(_ct(raw).value),
-                to_ctor_scalar=lambda v, _uct=uct, _ct=ct: _uct(_ct(int(v)).value).value,
+                from_ctor_scalar=lambda raw, _ct=ct: int(_ct(raw).value),  # type: ignore[misc,return-value]
+                to_ctor_scalar=lambda v, _uct=uct, _ct=ct: _uct(_ct(int(v)).value).value,  # type: ignore[misc,return-value]
             )
 
         if k == "char":
@@ -832,7 +840,7 @@ class Marshaller:
                     scalar_sz, ct = 2, c_uint16
                 else:
                     scalar_sz, ct = 4, c_uint32
-                def from_lean(tag, _ti=ti):
+                def from_lean(tag, _ti=ti):  # type: ignore[misc]
                     if isinstance(tag, int):
                         n = tag
                     elif ffi.lean_is_scalar(tag):

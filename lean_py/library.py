@@ -537,7 +537,7 @@ class LeanLibrary:
             return ""
         fn.argtypes = [POINTER(LeanObject)]
         fn.restype = POINTER(LeanObject)
-        unit = ctypes.cast(c_void_p(1), POINTER(LeanObject))
+        unit: Any = ctypes.cast(c_void_p(1), POINTER(LeanObject))
         result_ptr = fn(unit)
         try:
             size = self.ffi.lean_string_size(result_ptr)

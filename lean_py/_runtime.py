@@ -158,7 +158,7 @@ def _make_struct(sdef: StructDef, known: dict[str, type]) -> type:
         if f.bitfield is not None:
             fields.append((f.name, ct, f.bitfield))
         else:
-            fields.append((f.name, ct))
+            fields.append((f.name, ct))  # type: ignore[arg-type]
 
     cls = type(sdef.name, (Structure,), {"_fields_": fields})
     return cls
@@ -595,11 +595,16 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         return fn(n)
 
     def lean_uint64_to_nat(self, n):
-        fn = getattr(self.lib, "lean_uint64_to_nat", None)
-        if fn is None:
+        # lean_uint64_to_nat is static inline in lean.h — not exported.
+        # Mirror its logic: small values → lean_box, large → lean_big_uint64_to_nat.
+        max_small = (1 << 63) - 1  # LEAN_MAX_SMALL_NAT on 64-bit
+        if n <= max_small:
             return self.lean_box(n)
-        fn.argtypes = [c_uint64]; fn.restype = LeanObjectPtr
-        return fn(n)
+        big = getattr(self.lib, "lean_big_uint64_to_nat", None)
+        if big is not None:
+            big.argtypes = [c_uint64]; big.restype = LeanObjectPtr
+            return big(c_uint64(n).value)
+        raise RuntimeError(f"Cannot convert uint64 {n} to Nat: lean_big_uint64_to_nat not found")
 
     def lean_uint64_of_nat(self, p):
         # Inline: small scalar fast-path; large path via lean_uint64_of_big_nat.
@@ -713,19 +718,19 @@ def _ensure_built():
 def get_structs() -> dict[str, type]:
     """Get the dynamically created struct types."""
     _ensure_built()
-    return _cached_structs
+    return _cached_structs  # type: ignore[return-value]
 
 
 def get_ffi_class() -> type:
     """Get the dynamically created LeanFFI class."""
     _ensure_built()
-    return _LeanFFI
+    return _LeanFFI  # type: ignore[return-value]
 
 
 def get_constants() -> dict[str, int]:
     """Get the extracted constants."""
     _ensure_built()
-    return _cached_model.constants
+    return _cached_model.constants  # type: ignore[union-attr]
 
 
 @functools.lru_cache(maxsize=1)

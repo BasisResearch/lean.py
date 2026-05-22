@@ -44,12 +44,10 @@ DYLD_LIBRARY_PATH=$(lean --print-prefix)/lib/lean \
   python examples/07_z3py_drop_in/prove_with_lean.py --managed
 ```
 
-## Philip's lakefile
+## Managed project (zero-config)
 
-Philip Zucker (knuckledragger author) keeps a
-[single lakefile](https://github.com/philzook58/philzook58.github.io/blob/master/lakefile.toml)
-in his blog repo to make Lean scratch files work with Mathlib. The
-`ManagedProject` API does the same thing programmatically:
+`ManagedProject` can create a Lake project on the fly, so you don't need
+to maintain a lakefile:
 
 ```python
 from lean_py.project import ManagedProject
@@ -62,6 +60,5 @@ x = Int("x")
 prove(Implies(x > 0, x * x > 0))
 ```
 
-No lakefile to maintain. `ManagedProject` creates one under
-`~/.lean_py/managed/`, pins deps to your toolchain version, and caches
-the build.
+`ManagedProject` creates the project under `~/.lean_py/managed/`, pins
+deps to your toolchain version, and caches the build.

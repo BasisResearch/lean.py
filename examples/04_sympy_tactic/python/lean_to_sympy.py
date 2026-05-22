@@ -1,17 +1,27 @@
 """
 Convert Lean.Expr ADT trees (as ``LeanInductiveValue``) to SymPy expressions.
 
-The Lean tactic wraps its goal ``Expr`` via ``Py.ofLeanObj`` (which decodes
-registered ``derive_python`` types into ``LeanInductiveValue`` trees), then
-calls ``decode_and_check_prop`` which converts to SymPy and checks the result.
+Two consumption paths:
+
+**Path A** — pure Python.  Python already holds ``LeanInductiveValue`` Expr
+trees built via ``lib.Expr.app(...)`` etc.  Call ``expr_to_sympy()`` directly.
+
+**Path B** — tactic.  Lean wraps an ``Expr`` via ``Py.ofLeanObj`` and calls a
+Python function.  ``decode_and_check_prop()`` decodes the ``LeanObjHandle``
+with the marshaller and then converts to SymPy.
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import sympy
 from sympy import Integer, Symbol, Eq, simplify
 
 from lean_py.marshal import LeanInductiveValue
+
+if TYPE_CHECKING:
+    from lean_py.marshal import Marshaller
 
 
 # ---------------------------------------------------------------------------
@@ -180,13 +190,25 @@ def sympy_eq_check(lhs: sympy.Basic, rhs: sympy.Basic) -> bool:
 #  Tactic entry point
 # ---------------------------------------------------------------------------
 
-def decode_and_check_prop(expr) -> bool:
-    """Convert a ``Lean.Expr`` (as ``LeanInductiveValue``) to SymPy and check
-    if the proposition is identically true.
+_marshaller: Marshaller | None = None
 
-    Called from the Lean tactic: ``Py.ofLeanObj`` decodes the ``Lean.Expr``
-    into a ``LeanInductiveValue`` tree (thanks to ``derive_python``), which
-    is passed directly to this function.
+
+def setup(lib) -> None:
+    """Store a reference to the library's marshaller for ``decode_and_check_prop``."""
+    global _marshaller
+    _marshaller = lib.marshaller
+
+
+def decode_and_check_prop(lean_obj) -> bool:
+    """Decode a ``LeanObjHandle`` wrapping a ``Lean.Expr`` and check if the
+    proposition it represents is identically true according to SymPy.
+
+    Called from the Lean tactic via ``Py.ofLeanObj`` + ``@[python]``.
     """
-    prop = expr_to_sympy(expr)
+    if _marshaller is None:
+        raise RuntimeError(
+            "lean_to_sympy.setup(lib) must be called before decode_and_check_prop"
+        )
+    expr_tree = _marshaller.decode_lean_obj("Lean.Expr", lean_obj)
+    prop = expr_to_sympy(expr_tree)
     return sympy_prop_check(prop)

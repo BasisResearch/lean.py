@@ -13,7 +13,7 @@ precompileModules = true
 [[lean_exe]]
 name = "demo"
 root = "Main"
-moreLinkObjs = ["LeanPy/LeanPy:static", "LeanPy/leanPyNative:static"]
+moreLinkObjs = ["LeanPy/LeanPy:static", "LeanPy/leanPyNative:static", "Pantograph/Pantograph:static", "Regex/Regex:static"]
 moreLinkArgs = [
   "-Wl,-headerpad_max_install_names",
 ]
