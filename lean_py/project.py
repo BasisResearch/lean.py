@@ -222,6 +222,7 @@ def _generate_lakefile(
         '"LeanPy/LeanPy:static"',
         '"LeanPy/leanPyNative:static"',
         '"Pantograph/Pantograph:static"',
+        '"Regex/Regex:static"',
     ]
     for dep in deps:
         if dep in _KNOWN_DEPS:
