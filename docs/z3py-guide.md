@@ -1,6 +1,8 @@
 # Programming Z3 in Python, backed by Lean 4
 
-Lean 4 ships a tactic called `grind` that handles congruence closure, linear arithmetic, case splitting, and a good deal more. Calling it from Python normally means wiring up a Lake project, marshalling Lean expressions through the FFI, and threading tactic results back through the kernel API. `lean_py.z3` puts the z3py API in front of all that machinery so you can just write propositions and prove them.
+Automated theorem provers have matured to the point where they can verify real software: OS kernels, compilers, cryptographic libraries, distributed protocols. The most trustworthy among them are kernel-checked proof assistants like Lean 4, where every proof is independently verified by a small trusted core. The trade-off is accessibility. Writing propositions in Lean requires learning a dependently-typed functional language, configuring a Lake build system, and mastering a tactic language. For a Python programmer who wants to check whether `x + y > 0` follows from `x > 0` and `y > 0`, that is a steep price.
+
+`lean_py.z3` eliminates it. The library exposes the z3py API, compiles propositions into Lean 4 terms under the hood, dispatches them to Lean's `grind` tactic, and type-checks the resulting proof in the kernel.
 
 ```bash
 uv pip install "lean_py @ git+https://github.com/BasisResearch/lean.py"
@@ -16,14 +18,12 @@ prove(Implies(And(x > 0, y > 0), x + y > 0))
 # proved
 ```
 
-The library compiles your proposition into a Lean 4 term, hands it to `grind`, and type-checks the resulting proof in the kernel. On the first run it builds and caches a managed Lake project under `~/.lean_py/managed/`, which takes a minute or two; after that, startup is instant.
-
-The whole API mirrors z3py. If you have written z3py before, you already know it. If not, this guide walks through the whole thing, following the structure of the [z3py tutorial](https://ericpony.github.io/z3py-tutorial/guide-examples.htm).
+On the first run the library builds and caches a managed Lake project under `~/.lean_py/managed/`, which takes a minute or two. Every subsequent run picks up the cache and starts instantly.
 
 
 ## Boolean Logic
 
-The simplest use is proving tautologies over boolean variables.
+The most natural starting point is propositional reasoning. Declare some boolean variables, state a claim, and ask Lean to prove it.
 
 ```python
 p, q, r = Bools('p q r')
@@ -33,7 +33,7 @@ prove(Implies(And(p, Implies(p, q)), q))              # modus ponens
 prove(And(p, q) == And(q, p))                         # commutativity
 ```
 
-`prove` negates the claim and checks whether Lean can derive a contradiction. If it can, the claim is a theorem. The boolean connectives are `And`, `Or`, `Not`, `Implies`, `Xor`, and `If` (if-then-else). Python operators `&`, `|`, `~` also work on `BoolRef`.
+`prove` negates the claim and checks whether Lean can derive a contradiction. If it can, the original claim is a theorem. The boolean connectives are `And`, `Or`, `Not`, `Implies`, `Xor`, and `If` (if-then-else). Python operators `&`, `|`, `~` also work on `BoolRef`.
 
 ```python
 prove((p & q) == (q & p))
@@ -52,7 +52,7 @@ prove(Implies(And(*xs), xs[0]))
 
 ## Solvers
 
-For satisfiability checking and constraint solving, you use the `Solver` class.
+Proving tautologies is useful, but most real problems involve checking whether a set of constraints is consistent. The `Solver` class handles this.
 
 ```python
 x = Int('x')
@@ -62,9 +62,9 @@ s.add(x < 0)
 print(s.check())  # unsat
 ```
 
-Lean is a proof checker, so the solver works by negating the conjunction of all assertions and trying to prove the negation. If the proof goes through, the constraints are contradictory and `check()` returns `unsat`. If the tactics cannot close the goal, it returns `unknown`. It will never return `sat`, and model extraction is not available.
+Lean is a proof checker, so the solver works by negating the conjunction of all assertions and trying to prove the negation. If the proof goes through, the constraints are contradictory and `check()` returns `unsat`. If the tactics cannot close the goal, it returns `unknown`. It will never return `sat`, because Lean proves theorems rather than searching for satisfying assignments.
 
-Push/pop scoping lets you explore constraint spaces incrementally.
+Push/pop scoping lets you explore constraint spaces incrementally, adding constraints and then rolling them back.
 
 ```python
 s = Solver()
@@ -77,7 +77,7 @@ s.pop()
 # x < 0 is gone, only x > 0 remains
 ```
 
-Internally, `check()` tries `grind`, `omega`, `decide`, and `simp_all` in sequence, and the first tactic to discharge the goal wins. The `solve` function is shorthand for creating a solver, adding constraints, and checking.
+Internally, `check()` tries `grind`, `omega`, `decide`, and `simp_all` in sequence, and the first tactic to discharge the goal wins. The `solve` function is shorthand for the common pattern of creating a solver, adding constraints, and checking.
 
 ```python
 solve(x > 0, x < 0)  # unsat
@@ -86,7 +86,7 @@ solve(x > 0, x < 0)  # unsat
 
 ## Arithmetic
 
-Integer and real arithmetic both work, with all the Python operators you would expect: `+`, `-`, `*`, `/`, `%`, `**`, `<`, `<=`, `>`, `>=`.
+With the solver in hand, we can move to the bread and butter of formal verification: arithmetic reasoning. Integer and real arithmetic both work, with all the Python operators you would expect.
 
 ```python
 x, y, z = Ints('x y z')
@@ -97,7 +97,7 @@ prove(Implies(And(x > 0, y > 0), x + y > 0))               # monotonicity
 prove(Implies(x * x == 4, Or(x == 2, x == -2)))            # factoring
 ```
 
-The same operators work for reals.
+The same operators work for reals, which are Lean's mathematical reals rather than floating-point approximations.
 
 ```python
 a, b = Reals('a b')
@@ -114,14 +114,14 @@ prove(RealVal(1) / RealVal(3) + RealVal(2) / RealVal(3) == RealVal(1))
 prove(Q(1, 3) + Q(2, 3) == Q(1, 1))
 ```
 
-Natural numbers are available via `Nat` and `NatVal`, and compile to Lean's `Nat` type.
+Natural numbers compile to Lean's `Nat` type, which means `omega` can reason about them directly.
 
 ```python
 n = Nat('n')
 prove(n + NatVal(0) == n)
 ```
 
-`Sum` and `Product` fold over lists, and `Abs` gives you absolute value via an if-then-else encoding.
+`Sum` and `Product` fold over lists, and `Abs` gives you absolute value. Other arithmetic utilities include `ToReal`, `ToInt`, and `IsInt`.
 
 ```python
 xs = [Int(f'x_{i}') for i in range(4)]
@@ -132,10 +132,10 @@ prove(Abs(x) >= 0)
 prove(Implies(x >= 0, Abs(x) == x))
 ```
 
-Other arithmetic utilities: `ToReal`, `ToInt`, `IsInt`.
-
 
 ## Satisfiability and Validity
+
+The distinction between these two concepts is worth making precise, because the Lean backend handles them differently from a classical SMT solver.
 
 A formula is **valid** when it holds for every assignment to its free variables. A formula is **satisfiable** when at least one assignment makes it true. Validity is the dual of unsatisfiability: `F` is valid iff `Not(F)` is unsatisfiable.
 
@@ -153,36 +153,31 @@ s.add(And(p, q))
 print(s.check())  # unknown (cannot prove contradiction, so constraints are consistent)
 ```
 
-Because Lean is a proof checker rather than a model-finding solver, `check()` can only return `unsat` or `unknown`, and there is no way to extract a satisfying assignment.
+Because Lean is a proof checker rather than a model-finding solver, `check()` can only return `unsat` or `unknown`, and there is no way to extract a satisfying assignment. For problems where you need a model, you still want Z3 proper.
 
 
 ## Machine Arithmetic
 
-Bit-vectors have a fixed width tracked in the type, and arithmetic wraps on overflow.
+Mathematical integers are clean, but real hardware computes with fixed-width registers. Bit-vectors model exactly this: a fixed width tracked in the type, with arithmetic that wraps on overflow just as it does on a CPU.
 
 ```python
 x, y = BitVecs('x y', 32)
 
-# Unsigned overflow wraps
-prove(BitVecVal(0xFFFFFFFF, 32) + BitVecVal(1, 32) == BitVecVal(0, 32))
+prove(BitVecVal(0xFFFFFFFF, 32) + BitVecVal(1, 32) == BitVecVal(0, 32))  # overflow wraps
 
-# Bitwise
 prove((x & y) == (y & x))
 prove((x | 0) == x)
 prove((x ^ x) == BitVecVal(0, 32))
 prove((~x) == (BitVecVal(-1, 32) ^ x))
 ```
 
-Signed vs unsigned comparisons matter here. The Python operators `<`, `<=`, `>`, `>=` are signed (matching z3py). For unsigned comparisons, use `ULT`, `ULE`, `UGT`, `UGE`.
+Signed vs unsigned comparisons matter. The Python operators `<`, `<=`, `>`, `>=` are signed (matching z3py), which means `0xFF` on an 8-bit vector is `-1`. For unsigned comparisons, use `ULT`, `ULE`, `UGT`, `UGE`.
 
 ```python
 x = BitVec('x', 8)
 
-# Signed: 0xFF is -1, which is < 0
-prove(BitVecVal(0xFF, 8) < BitVecVal(0, 8))
-
-# Unsigned: 0xFF is 255, which is > 0
-prove(UGT(BitVecVal(0xFF, 8), BitVecVal(0, 8)))
+prove(BitVecVal(0xFF, 8) < BitVecVal(0, 8))     # signed: 0xFF is -1
+prove(UGT(BitVecVal(0xFF, 8), BitVecVal(0, 8)))  # unsigned: 0xFF is 255
 ```
 
 `Extract` pulls out bit ranges, `Concat` joins bit-vectors, and `ZeroExt`/`SignExt` widen them.
@@ -193,15 +188,12 @@ hi = Extract(15, 8, x)   # upper byte
 lo = Extract(7, 0, x)    # lower byte
 prove(Concat(hi, lo) == x)
 
-# Zero-extend 8-bit to 16-bit
 y = BitVec('y', 8)
 prove(ZeroExt(8, y) == Concat(BitVecVal(0, 8), y))
-
-# Sign-extend
 prove(SignExt(8, BitVecVal(0xFF, 8)) == BitVecVal(0xFFFF, 16))
 ```
 
-`<<` and `>>` are built-in (arithmetic shift right, which sign-extends). `LShR` gives you the logical (unsigned) shift right that zero-fills.
+`<<` and `>>` are built-in (arithmetic shift right, which sign-extends). `LShR` gives you the logical shift right that zero-fills.
 
 ```python
 x = BitVec('x', 8)
@@ -209,7 +201,7 @@ prove(LShR(BitVecVal(0x80, 8), 1) == BitVecVal(0x40, 8))  # logical: 0 fill
 prove((BitVecVal(0x80, 8) >> 1) == BitVecVal(0xC0, 8))     # arithmetic: sign fill
 ```
 
-Division comes in signed and unsigned variants: `SDiv`/`SRem` for signed, `UDiv`/`URem` for unsigned.
+Division comes in signed (`SDiv`/`SRem`) and unsigned (`UDiv`/`URem`) variants.
 
 ```python
 a, b = BitVecs('a b', 8)
@@ -220,20 +212,19 @@ prove(UDiv(BitVecVal(7, 8), BitVecVal(2, 8)) == BitVecVal(3, 8))
 
 ```python
 x = BitVec('x', 4)
-prove(BVRedAnd(BitVecVal(0xF, 4)) == BitVecVal(1, 1))  # all bits set
-prove(BVRedOr(BitVecVal(0, 4)) == BitVecVal(0, 1))       # no bits set
+prove(BVRedAnd(BitVecVal(0xF, 4)) == BitVecVal(1, 1))
+prove(BVRedOr(BitVecVal(0, 4)) == BitVecVal(0, 1))
 prove(RepeatBitVec(2, BitVecVal(0xA, 4)) == BitVecVal(0xAA, 8))
 ```
 
-The overflow detection predicates check whether an operation would overflow or underflow at a given width, which is useful for verifying C-style integer code.
+Overflow detection predicates are particularly useful for verifying C-style integer code, where undefined behaviour lurks in signed overflow.
 
 ```python
 a, b = BitVecs('a b', 8)
-# If no unsigned overflow on a+b, then a+b >= a
 prove(Implies(BVAddNoOverflow(a, b, signed=False), UGE(a + b, a)))
 ```
 
-`BV2Int` and `Int2BV` convert between bit-vectors and mathematical integers.
+`BV2Int` and `Int2BV` bridge bit-vectors and mathematical integers.
 
 ```python
 x = BitVec('x', 8)
@@ -243,14 +234,14 @@ prove(Implies(ULE(x, BitVecVal(10, 8)), BV2Int(x) <= 10))
 
 ## Functions
 
-Uninterpreted functions let you reason about abstract operations without fixing a concrete implementation. The only fact the prover knows is congruence: equal inputs produce equal outputs.
+All the examples so far reason about concrete operations: addition, bitwise AND, comparison. Uninterpreted functions go a level up. You declare a function with a name and a signature, and the prover knows exactly one fact about it: equal inputs produce equal outputs. Everything else is left abstract.
 
 ```python
 f = Function('f', IntSort(), IntSort())
 x, y = Ints('x y')
 
-prove(Implies(x == y, f(x) == f(y)))          # congruence
-prove(Implies(And(f(x) == 0, f(y) == 1), x != y))
+prove(Implies(x == y, f(x) == f(y)))              # congruence
+prove(Implies(And(f(x) == 0, f(y) == 1), x != y))  # different outputs, different inputs
 ```
 
 Multi-argument functions take their domain sorts first and the range sort last.
@@ -261,7 +252,7 @@ x, y = Ints('x y')
 prove(Implies(g(x, y), g(x, y)))
 ```
 
-You can also define concrete recursive functions with `RecFunction` and `RecAddDefinition`.
+When you do want a concrete implementation, `RecFunction` and `RecAddDefinition` let you define recursive functions that the prover can unfold.
 
 ```python
 fac = RecFunction('fac', IntSort(), IntSort())
@@ -273,7 +264,9 @@ prove(fac(IntVal(5)) == IntVal(120))
 
 ## Uninterpreted Sorts
 
-`DeclareSort` creates an opaque type with no built-in structure. Combined with uninterpreted functions, you can encode first-order theories like the classic Socrates syllogism.
+Uninterpreted functions abstract over implementations. Uninterpreted sorts abstract over types. `DeclareSort` creates an opaque type with no built-in structure, and combined with functions over that type, you can encode arbitrary first-order theories.
+
+The classic example is the Socrates syllogism: all men are mortal, Socrates is a man, therefore Socrates is mortal.
 
 ```python
 Entity = DeclareSort('Entity')
@@ -292,7 +285,7 @@ prove(Implies(
 
 ## Quantifiers
 
-`ForAll` and `Exists` quantify over any sort.
+The Socrates example above already used `ForAll`. Quantifiers let you make universal and existential claims over any sort.
 
 ```python
 x = Int('x')
@@ -322,19 +315,19 @@ print(q.is_forall())   # True
 
 ## Arrays
 
-SMT arrays are total maps from an index sort to a value sort. `Select` reads, `Store` writes, and `K` creates a constant array where every index maps to the same value.
+Program verification constantly needs to reason about memory, and the SMT encoding of memory is the array: a total map from an index sort to a value sort. `Select` reads, `Store` writes, and `K` creates a constant array where every index maps to the same value.
 
 ```python
 A = Array('A', IntSort(), IntSort())
 x, y = Ints('x y')
 
-# Read-over-write
+# Read-over-write: reading the index you just wrote gives back the value
 prove(Select(Store(A, x, y), x) == y)
 
-# Write to a different index, read the original
+# Writing to one index does not affect a different index
 prove(Implies(x != y, Select(Store(A, x, IntVal(10)), y) == Select(A, y)))
 
-# Constant array
+# Constant array: every index maps to zero
 B = K(IntSort(), IntVal(0))
 prove(Select(B, IntVal(42)) == IntVal(0))
 ```
@@ -361,7 +354,7 @@ prove(A[x] == Select(A, x))
 
 ## Sets
 
-Sets are encoded as arrays with boolean range. `IsMember` checks membership, `SetAdd` inserts an element, and `SetDel` removes one.
+Sets are arrays with boolean range. Where an array maps indices to values, a set maps elements to membership. `IsMember` checks membership, `SetAdd` inserts an element, `SetDel` removes one.
 
 ```python
 S = Const('S', SetSort(IntSort()))
@@ -372,7 +365,7 @@ prove(IsMember(IntVal(3), S2))
 prove(Implies(IsMember(x, S), IsMember(x, SetUnion(S, EmptySet(IntSort())))))
 ```
 
-The usual set algebra is all here: `SetUnion`, `SetIntersect`, `SetComplement`, `SetDifference`, `IsSubset`.
+The standard set algebra is all here: `SetUnion`, `SetIntersect`, `SetComplement`, `SetDifference`, `IsSubset`.
 
 ```python
 A = Const('A', SetSort(IntSort()))
@@ -391,7 +384,7 @@ prove(IsMember(IntVal(5), Singleton(IntVal(5))))
 
 ## Algebraic Datatypes
 
-Datatypes compile to real Lean 4 inductive types. Because Lean's kernel understands inductives natively, `grind` gets constructor injectivity, disjointness of constructors, and exhaustive case analysis automatically.
+All the sorts so far are built-in: integers, booleans, bit-vectors, arrays. Algebraic datatypes let you define your own. In z3py they are backed by Z3's internal datatype solver. In `lean_py.z3` they compile to real Lean 4 inductive types, which means the kernel gives you constructor injectivity, disjointness of constructors, and exhaustive case analysis for free. This is where the Lean backend pays off most visibly.
 
 ### Enumerations
 
@@ -425,7 +418,7 @@ prove(Pair.snd(Pair.mk_pair(1, 2)) == IntVal(2))
 
 ### Recursive Datatypes
 
-For self-referential fields, pass the builder object itself as the sort.
+For self-referential fields, pass the builder object itself as the sort. The library handles the circular reference when it registers the inductive in Lean's environment.
 
 ```python
 Tree = Datatype('Tree')
@@ -450,7 +443,7 @@ prove(Tree.is_node(t2))
 
 ### DatatypeSortRef API
 
-The sort object exposes constructor, recogniser, and accessor metadata by index.
+The sort object exposes constructor, recogniser, and accessor metadata by index, which is useful for writing generic code over datatype definitions.
 
 ```python
 print(Tree.num_constructors())  # 2
@@ -462,7 +455,7 @@ print(Tree.accessor(1, 0))       # left accessor (ctor 1, field 0)
 
 ### Convenience Constructors
 
-`TupleSort` builds a named tuple type in one call, returning the sort, the constructor, and a list of accessor functions.
+Declaring constructors field by field is explicit but verbose. `TupleSort` builds a named tuple type in one call, returning the sort, the constructor, and a list of accessor functions.
 
 ```python
 Pair, mk_pair, [fst, snd] = TupleSort('Pair', [IntSort(), IntSort()])
@@ -491,7 +484,7 @@ prove(Fruit.apple != Fruit.banana)
 
 ## Strings
 
-String variables support the usual operations: length, containment, prefix/suffix testing, and so on.
+String constraints arise naturally in web security (input validation, injection attacks) and protocol verification. The string sort supports length, containment, prefix/suffix testing, and the rest of the standard SMT string theory.
 
 ```python
 s = String('s')
@@ -503,7 +496,7 @@ prove(PrefixOf(StringVal("he"), StringVal("hello")))
 prove(SuffixOf(StringVal("lo"), StringVal("hello")))
 ```
 
-Substrings, character indexing, and replacement all work the way you would expect.
+Substrings, character indexing, and replacement all work as you would expect.
 
 ```python
 prove(SubString(StringVal("abcdef"), 2, 3) == StringVal("cde"))
@@ -521,18 +514,16 @@ prove(StrToCode(StringVal("A")) == 65)
 prove(StrFromCode(IntVal(65)) == StringVal("A"))
 ```
 
-`StrConcat` joins strings. `LastIndexOf` finds the last occurrence.
+`StrConcat` joins strings. The full set of string operations: `Length`, `Contains`, `PrefixOf`, `SuffixOf`, `Replace`, `SubString`, `IndexOf`, `LastIndexOf`, `StrConcat`, `StrToInt`, `IntToStr`, `At`, `StrToCode`, `StrFromCode`.
 
 ```python
 prove(StrConcat(StringVal("he"), StringVal("llo")) == StringVal("hello"))
 ```
 
-The full set of string operations: `Length`, `Contains`, `PrefixOf`, `SuffixOf`, `Replace`, `SubString`, `IndexOf`, `LastIndexOf`, `StrConcat`, `StrToInt`, `IntToStr`, `At`, `StrToCode`, `StrFromCode`.
-
 
 ## Regular Expressions
 
-You build regex patterns out of combinators and test membership with `InRe`.
+String constraints often need pattern matching. The regex sort gives you a combinator library for building patterns and testing membership with `InRe`.
 
 ```python
 s = String('s')
@@ -542,41 +533,29 @@ number = Plus(digit)
 prove(Implies(InRe(s, number), Length(s) > 0))
 ```
 
-The combinators follow the standard regex algebra.
+The combinators follow the standard regex algebra: `Re` (literal), `Star` (Kleene star), `Plus` (one or more), `Option` (zero or one), `Union`, `Intersect`, `Complement`, `Range` (character range), `Loop` (bounded repetition), `AllChar`, and `Diff`.
 
 ```python
-# Literal string as regex
 prove(InRe(StringVal("abc"), Re(StringVal("abc"))))
 
-# Kleene star: zero or more
 prove(InRe(StringVal(""), Star(Re(StringVal("a")))))
 prove(InRe(StringVal("aaa"), Star(Re(StringVal("a")))))
 
-# Option: zero or one
 prove(InRe(StringVal(""), Option(Re(StringVal("a")))))
 
-# Union
 ab = Union(Re(StringVal("a")), Re(StringVal("b")))
 prove(InRe(StringVal("a"), ab))
 prove(InRe(StringVal("b"), ab))
 
-# Bounded repetition
 prove(InRe(StringVal("aaa"), Loop(Re(StringVal("a")), 2, 4)))
 ```
-
-The full set: `Re`, `Star`, `Plus`, `Option`, `Union`, `Intersect`, `Complement`, `Range`, `Loop`, `AllChar`, `Diff`, `InRe`.
 
 
 ## Floating Point
 
-IEEE 754 floating-point is available via `FPSort(ebits, sbits)`, with predefined sorts `Float16()`, `Float32()`, `Float64()`, and `Float128()`.
+IEEE 754 floating-point arithmetic is notoriously tricky to reason about. NaN is not equal to itself, positive and negative zero are distinct representations that compare equal, and rounding makes every operation approximate. The floating-point sort lets you state and prove properties about all of this.
 
-```python
-x = FP('x', Float64())
-y = FP('y', Float64())
-```
-
-The special values behave as the standard requires.
+Predefined sorts: `Float16()`, `Float32()`, `Float64()`, `Float128()`. Custom sorts via `FPSort(ebits, sbits)`.
 
 ```python
 nan = fpNaN(Float64())
@@ -584,11 +563,8 @@ pinf = fpPlusInfinity(Float64())
 pzero = fpPlusZero(Float64())
 mzero = fpMinusZero(Float64())
 
-# NaN is not equal to itself
-prove(Not(fpEQ(nan, nan)))
-
-# Positive and negative zero are equal
-prove(fpEQ(pzero, mzero))
+prove(Not(fpEQ(nan, nan)))       # NaN != NaN
+prove(fpEQ(pzero, mzero))        # +0.0 == -0.0
 ```
 
 Every arithmetic operation takes a rounding mode as its first argument. The five IEEE rounding modes are `RNE()` (nearest ties to even), `RNA()` (nearest ties away), `RTP()` (toward positive), `RTN()` (toward negative), and `RTZ()` (toward zero).
@@ -600,13 +576,7 @@ y = FPVal(2.5, Float64())
 prove(fpEQ(fpAdd(rm, x, y), FPVal(4.0, Float64())))
 ```
 
-Arithmetic operations: `fpAdd`, `fpSub`, `fpMul`, `fpDiv`, `fpNeg`, `fpAbs`, `fpSqrt`, `fpFMA` (fused multiply-add), `fpRem`, `fpMin`, `fpMax`, `fpRoundToIntegral`.
-
-Comparisons: `fpEQ`, `fpNEQ`, `fpLT`, `fpLEQ`, `fpGT`, `fpGEQ`.
-
-Classification predicates: `fpIsNaN`, `fpIsInf`, `fpIsZero`, `fpIsNormal`, `fpIsSubnormal`, `fpIsNegative`, `fpIsPositive`.
-
-Conversions: `fpToReal`, `fpToSBV`, `fpToUBV`, `fpToFP`, `fpBVToFP`, `fpRealToFP`, `fpSignedToFP`, `fpUnsignedToFP`, `fpToIEEEBV`.
+Arithmetic: `fpAdd`, `fpSub`, `fpMul`, `fpDiv`, `fpNeg`, `fpAbs`, `fpSqrt`, `fpFMA`, `fpRem`, `fpMin`, `fpMax`, `fpRoundToIntegral`. Comparisons: `fpEQ`, `fpNEQ`, `fpLT`, `fpLEQ`, `fpGT`, `fpGEQ`. Classification: `fpIsNaN`, `fpIsInf`, `fpIsZero`, `fpIsNormal`, `fpIsSubnormal`, `fpIsNegative`, `fpIsPositive`. Conversions: `fpToReal`, `fpToSBV`, `fpToUBV`, `fpToFP`, `fpBVToFP`, `fpRealToFP`, `fpSignedToFP`, `fpUnsignedToFP`, `fpToIEEEBV`.
 
 You can construct an FP value from its sign, exponent, and significand bit-vectors with `fpFP`.
 
@@ -620,19 +590,16 @@ val = fpFP(sgn, exp, sig)   # 1.0 as Float32
 
 ## Pseudo-Boolean Constraints
 
-`AtMost` and `AtLeast` constrain how many booleans in a list can be true.
+Some problems are naturally expressed as counting constraints over booleans: at most `k` of these flags can be true, or the weighted sum of these booleans must equal a target. `AtMost` and `AtLeast` handle the unweighted case.
 
 ```python
 p, q, r = Bools('p q r')
 
-# At most one can be true
 prove(Implies(AtMost([p, q, r], 1), Not(And(p, q))))
-
-# All three must be true
 prove(Implies(AtLeast([p, q, r], 3), And(p, And(q, r))))
 ```
 
-For weighted constraints, `PbEq([(b, w), ...], k)` asserts that the weighted sum of booleans equals `k`, where each boolean contributes its weight when true. `PbLe` and `PbGe` give you the inequality variants.
+`PbEq([(b, w), ...], k)` asserts that the weighted sum of booleans equals `k`, where each boolean contributes its weight when true. `PbLe` and `PbGe` give you the inequality variants.
 
 ```python
 prove(Implies(PbEq([(p, 2), (q, 3)], 5), And(p, q)))
@@ -641,17 +608,13 @@ prove(Implies(PbEq([(p, 2), (q, 3)], 5), And(p, q)))
 
 ## Characters and Finite Domains
 
-The character sort lets you reason about individual characters and their integer codes.
+The character sort reasons about individual characters and their integer codes, and finite domain sorts have a fixed number of elements.
 
 ```python
 prove(CharToInt(CharVal('A')) == 65)
 prove(CharIsDigit(CharVal('7')))
 prove(Not(CharIsDigit(CharVal('x'))))
-```
 
-Finite domain sorts have a fixed number of elements, which is useful for bounded model checking.
-
-```python
 FD = FiniteDomainSort('FD', 5)
 prove(FiniteDomainVal(0, FD) == FiniteDomainVal(0, FD))
 print(FiniteDomainSize(FD))  # 5
@@ -660,7 +623,7 @@ print(FiniteDomainSize(FD))  # 5
 
 ## Tactics and Goals
 
-`prove` and `Solver.check` use a fixed sequence of tactics internally. When you need finer control, the tactic API gives you direct access to Lean's tactic engine.
+Everything so far uses `prove` and `Solver.check`, which run a fixed sequence of tactics internally. When the default sequence falls short, the tactic API gives you direct access to Lean's full tactic engine, which is substantially more powerful.
 
 A `Goal` holds a list of propositions. A `Tactic` transforms a goal into zero or more subgoals. Zero subgoals means the proof is complete.
 
@@ -679,13 +642,8 @@ print(len(result))  # 0 subgoals means proved
 `Then` sequences tactics, `OrElse` tries alternatives, and `Repeat` loops until nothing changes.
 
 ```python
-# Simplify, then close with omega
 t = Then(Tactic("simp"), Tactic("omega"))
-
-# Try decide first, fall back to grind
 t = OrElse(Tactic("decide"), Tactic("grind"))
-
-# Repeat simplification until fixed point
 t = Repeat(Tactic("simp"))
 ```
 
@@ -693,7 +651,7 @@ t = Repeat(Tactic("simp"))
 
 ### Arbitrary Lean Tactics
 
-You can pass any valid Lean tactic string directly, which is how you handle goals that need custom proof scripts. Here is exhaustiveness over an enum via case analysis.
+You can pass any valid Lean tactic string directly. Consider proving exhaustiveness over an enum: the built-in tactics cannot handle this alone, but a custom tactic script with case analysis discharges all subgoals immediately.
 
 ```python
 Color, (red, green, blue) = EnumSort('Color', ['red', 'green', 'blue'])
@@ -748,7 +706,7 @@ result = simp.apply(g)
 
 ## SMT-LIB2 Parsing
 
-`parse_smt2_string` parses standard SMT-LIB2 format directly into z3py expressions, which is handy for importing constraints from other tools.
+Many verification tools emit constraints in SMT-LIB2 format. `parse_smt2_string` parses this format directly into z3py expressions, so you can feed constraints from other tools into lean_py's prover.
 
 ```python
 assertions = parse_smt2_string('''
@@ -788,7 +746,7 @@ The parser handles `declare-const`, `declare-fun`, `declare-sort`, `define-sort`
 
 ## Fixedpoint (Datalog)
 
-The `Fixedpoint` class encodes Datalog-style rules as universally quantified implications and proves queries via the tactic engine. You declare relations, add facts and rules, then query whether a relation holds.
+The `Fixedpoint` class encodes Datalog-style rules as universally quantified implications and proves queries via the tactic engine. You declare relations, add facts and rules, then query whether a relation holds for specific values.
 
 ```python
 fp = Fixedpoint()
@@ -811,15 +769,13 @@ print(fp.query(Path(1, 4)))  # unknown (cannot prove it)
 
 ## List Comprehensions
 
-Python's list comprehensions work naturally with the z3 API for building constraint sets programmatically.
+Python's list comprehensions work naturally for building constraint sets programmatically. This is particularly useful for problems with regular structure, like grid puzzles or scheduling constraints.
 
 ```python
-# All pairs of distinct variables from a list
 xs = [Int(f'x_{i}') for i in range(5)]
 distinct = [xs[i] != xs[j] for i in range(5) for j in range(i+1, 5)]
 prove(Implies(And(*distinct), xs[0] != xs[4]))
 
-# Range constraints
 bounded = [And(x >= 0, x < 10) for x in xs]
 ```
 
@@ -834,7 +790,7 @@ ys = [FreshInt() for _ in range(5)]  # x!0, x!1, x!2, ...
 ```
 
 
-## Substitution
+## Substitution and Lambdas
 
 `substitute` replaces subexpressions in a term by matching on identity.
 
@@ -845,20 +801,13 @@ e2 = substitute(e, (x, IntVal(1)), (y, IntVal(2)))
 prove(e2 == 1 + 2 + z)
 ```
 
-`Lambda` constructs an anonymous function represented as an array.
+`Lambda` constructs an anonymous function represented as an array. `Distinct` asserts that all arguments are pairwise different, and works on any sort.
 
 ```python
 x = Int('x')
 f = Lambda([x], x + 1)
 prove(Select(f, IntVal(5)) == IntVal(6))
-```
 
-
-## Distinct
-
-`Distinct` asserts that all arguments are pairwise different, and works on any sort.
-
-```python
 x, y, z = Ints('x y z')
 prove(Implies(Distinct(x, y, z), And(x != y, x != z, y != z)))
 ```
@@ -868,30 +817,26 @@ prove(Implies(Distinct(x, y, z), And(x != y, x != z, y != z)))
 
 ### Eight Queens
 
-One integer variable per row encodes the column placement. We cannot extract a solution from Lean (no model generation), but we can prove that forcing two queens into the same column makes the constraints contradictory.
+One integer variable per row encodes the column placement. We cannot extract a solution from Lean, but we can prove that forcing two queens into the same column makes the constraints contradictory.
 
 ```python
 Q = [Int(f'Q_{i}') for i in range(8)]
 s = Solver()
 
-# Each queen in columns 1..8
 for i in range(8):
     s.add(And(Q[i] >= 1, Q[i] <= 8))
 
-# No two queens in the same column or diagonal
 for i in range(8):
     for j in range(i+1, 8):
         s.add(Q[i] != Q[j])
         s.add(Q[i] - Q[j] != i - j)
         s.add(Q[i] - Q[j] != j - i)
 
-# Consistent so far
-print(s.check())  # unknown
+print(s.check())  # unknown (consistent)
 
-# Force a contradiction: two queens in the same column
 s.push()
 s.add(Q[0] == Q[1])
-print(s.check())   # unsat
+print(s.check())   # unsat (contradictory)
 s.pop()
 ```
 
@@ -911,35 +856,29 @@ prove(Implies(
 
 ## Expression Introspection
 
-Expressions expose their structure: sort, child nodes, head declaration, and an S-expression representation.
+Expressions expose their structure for programmatic analysis: sort, child nodes, head declaration, and S-expression representation. The `is_*` predicates let you pattern-match on expression structure.
 
 ```python
 x, y = Ints('x y')
 e = x + y * 2
 
-print(e.sort())       # Int
-print(e.num_args())   # 2 (left and right of +)
-print(e.arg(0))       # x
-print(e.arg(1))       # y * 2
-print(e.decl())       # +
+print(e.sort())        # Int
+print(e.num_args())    # 2
+print(e.arg(0))        # x
+print(e.arg(1))        # y * 2
 print(e.decl().name()) # HAdd.hAdd
-print(e.sexpr())      # S-expression representation
-```
+print(e.sexpr())       # S-expression
 
-The `is_*` predicates let you pattern-match on expression structure programmatically.
-
-```python
 print(is_add(e))       # True
 print(is_int(x))       # True
 print(is_bool(x > 0))  # True
 print(is_const(x))     # True
-print(is_app(e))       # True
 ```
 
 
 ## Serialisation
 
-`.sexpr()` on expressions prints S-expressions. The solver can export its full state as SMT-LIB2 via `.to_smt2()`.
+`.sexpr()` prints S-expressions for expressions, and `.to_smt2()` exports the solver's full state as SMT-LIB2.
 
 ```python
 x = Int('x')
@@ -952,19 +891,12 @@ print(s.to_smt2())  # full SMT-LIB2 with check-sat
 
 ## Advanced Setup
 
-The zero-config path works for most cases: just `from lean_py.z3 import *` and start proving. The kernel initialises lazily from a `ManagedProject` the first time you call `prove` or `Solver.check`. If you want to initialise it yourself, or pull in extra Lean libraries like Batteries or Mathlib, you can do so explicitly.
+The kernel initialises lazily from a `ManagedProject` the first time you call `prove` or `Solver.check`, so the examples above all work without any explicit setup. If you want to pull in additional Lean libraries like Batteries or Mathlib, or point the kernel at your own Lake project, you can initialise it yourself.
 
 ```python
 from lean_py.project import ManagedProject
 from lean_py.z3 import *
 
-mp = ManagedProject.get()
-set_kernel(mp.kernel())
-```
-
-`ManagedProject` creates and caches a Lake project under `~/.lean_py/managed/`. Pass `deps` to add libraries.
-
-```python
 mp = ManagedProject.get(deps=("batteries",))
 set_kernel(mp.kernel())
 ```
@@ -986,19 +918,9 @@ set_kernel(k)
 
 ## What Works
 
-Lean's `grind`, `omega`, `decide`, `simp`, and the other 30+ registered tactics cover a broad range of automated reasoning:
+Lean's `grind`, `omega`, `decide`, `simp`, and the other 30+ registered tactics cover a broad range of automated reasoning: (1) propositional logic, complete via `decide`, (2) linear integer and natural number arithmetic, complete via `omega`, (3) congruence closure with uninterpreted functions via `grind`, (4) datatype reasoning including constructor injectivity, disjointness, and exhaustive case splits, (5) quantified formulas that `grind` can instantiate, (6) bit-vector reasoning when reducible to bounded arithmetic, and (7) string and regex membership proofs.
 
-- Propositional logic (complete via `decide`)
-- Linear integer and natural number arithmetic (complete via `omega`)
-- Congruence closure with uninterpreted functions (`grind`)
-- Datatype reasoning: constructor injectivity, disjointness, exhaustive case splits
-- Quantified formulas that `grind` can instantiate
-- Bit-vector reasoning (when reducible to bounded arithmetic)
-- String and regex membership proofs
-
-Lean proves theorems; it does not find satisfying assignments. `Solver.model()` raises `NotImplementedError`, `check()` returns `unsat` or `unknown` (never `sat`), and `Optimize` is a placeholder. Nonlinear arithmetic (products of two variables) may time out. Mutually recursive datatypes are not yet supported. For constraint satisfaction and model finding, you still want Z3 proper.
-
-Every `unsat` and every successful `prove` is backed by a proof term that has been type-checked in Lean's kernel.
+Lean proves theorems. It does not find satisfying assignments. `Solver.model()` raises `NotImplementedError`, `check()` returns `unsat` or `unknown` (never `sat`), and `Optimize` is a placeholder. Nonlinear arithmetic involving products of two variables may time out. Mutually recursive datatypes are not yet supported. For constraint satisfaction and model finding, you still want Z3 proper.
 
 
 ## Comparison with z3py
