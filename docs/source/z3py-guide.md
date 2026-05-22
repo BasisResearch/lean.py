@@ -1,4 +1,4 @@
-# A Z3-style Symbolic Reasoning APIf for Python, backed by Lean 4
+# A Z3-style Symbolic Reasoning API for Python, backed by Lean 4
 
 Lean 4 is a general-purpose symbolic reasoning engine. Its tactic library covers linear arithmetic (`omega`), congruence closure with E-matching (`grind`), propositional decidability (`decide`), and rewriting (`simp`), and the system is designed to be extended with new sorts, constructors, and decision procedures. Every proof is independently checked by a small trusted kernel, so the Python side never needs to trust the automation; it trusts the checker. The overhead of learning Lean's type theory and build system has kept most of this machinery out of reach for Python programmers.
 
