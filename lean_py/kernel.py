@@ -52,8 +52,7 @@ class TacticResult:
         return self.status == "success"
 
     @classmethod
-    def parse(cls, encoded: str, kernel: "Kernel",
-              raw_state: Any) -> "TacticResult":
+    def parse(cls, encoded: str, kernel: "Kernel", raw_state: Any) -> "TacticResult":
         """Parse the multi-line encoding produced by Lean's
         ``encodeTacticResult``."""
         if not encoded:
@@ -97,28 +96,33 @@ class GoalState:
         return self._kernel._lib.leanpy_kernel_goal_pretty(self._handle)
 
     def try_tactic(self, tactic: str) -> TacticResult:
-        encoded, next_state = \
-            self._kernel._lib.leanpy_kernel_goal_try_tactic(self._handle, tactic)
+        encoded, next_state = self._kernel._lib.leanpy_kernel_goal_try_tactic(
+            self._handle, tactic
+        )
         return TacticResult.parse(encoded, self._kernel, next_state)
 
     def try_assign(self, expr: str) -> TacticResult:
-        encoded, next_state = \
-            self._kernel._lib.leanpy_kernel_goal_try_assign(self._handle, expr)
+        encoded, next_state = self._kernel._lib.leanpy_kernel_goal_try_assign(
+            self._handle, expr
+        )
         return TacticResult.parse(encoded, self._kernel, next_state)
 
     def conv_enter(self) -> TacticResult:
-        encoded, next_state = \
-            self._kernel._lib.leanpy_kernel_goal_conv_enter(self._handle)
+        encoded, next_state = self._kernel._lib.leanpy_kernel_goal_conv_enter(
+            self._handle
+        )
         return TacticResult.parse(encoded, self._kernel, next_state)
 
     def calc_enter(self) -> TacticResult:
-        encoded, next_state = \
-            self._kernel._lib.leanpy_kernel_goal_calc_enter(self._handle)
+        encoded, next_state = self._kernel._lib.leanpy_kernel_goal_calc_enter(
+            self._handle
+        )
         return TacticResult.parse(encoded, self._kernel, next_state)
 
     def fragment_exit(self) -> TacticResult:
-        encoded, next_state = \
-            self._kernel._lib.leanpy_kernel_goal_fragment_exit(self._handle)
+        encoded, next_state = self._kernel._lib.leanpy_kernel_goal_fragment_exit(
+            self._handle
+        )
         return TacticResult.parse(encoded, self._kernel, next_state)
 
     # ---- prograde tactics --------------------------------------------------
@@ -126,21 +130,27 @@ class GoalState:
     def try_have(self, binder_name: str, type_str: str) -> TacticResult:
         """Equivalent to ``have <binder_name> : <type_str> := ?``."""
         encoded, next_state = self._kernel._lib.leanpy_kernel_goal_try_have(
-            self._handle, binder_name, type_str,
+            self._handle,
+            binder_name,
+            type_str,
         )
         return TacticResult.parse(encoded, self._kernel, next_state)
 
     def try_let(self, binder_name: str, type_str: str) -> TacticResult:
         """Equivalent to ``let <binder_name> : <type_str> := ?``."""
         encoded, next_state = self._kernel._lib.leanpy_kernel_goal_try_let(
-            self._handle, binder_name, type_str,
+            self._handle,
+            binder_name,
+            type_str,
         )
         return TacticResult.parse(encoded, self._kernel, next_state)
 
     def try_define(self, binder_name: str, expr_str: str) -> TacticResult:
         """Equivalent to ``let <binder_name> := <expr_str>``."""
         encoded, next_state = self._kernel._lib.leanpy_kernel_goal_try_define(
-            self._handle, binder_name, expr_str,
+            self._handle,
+            binder_name,
+            expr_str,
         )
         return TacticResult.parse(encoded, self._kernel, next_state)
 
@@ -148,7 +158,8 @@ class GoalState:
         """Substitute the goal with an expression that may contain sorrys,
         leaving the sorrys as fresh subgoals."""
         encoded, next_state = self._kernel._lib.leanpy_kernel_goal_try_draft(
-            self._handle, expr_str,
+            self._handle,
+            expr_str,
         )
         return TacticResult.parse(encoded, self._kernel, next_state)
 
@@ -158,7 +169,9 @@ class GoalState:
         return list(self._kernel._lib.leanpy_kernel_goal_state_goal_names(self._handle))
 
     def parent_names(self) -> list[str]:
-        return list(self._kernel._lib.leanpy_kernel_goal_state_parent_names(self._handle))
+        return list(
+            self._kernel._lib.leanpy_kernel_goal_state_parent_names(self._handle)
+        )
 
     def root_name(self) -> str:
         return self._kernel._lib.leanpy_kernel_goal_state_root_name(self._handle)
@@ -186,7 +199,8 @@ class GoalState:
 
     def resume(self, goal_names: list[str]) -> "GoalState":
         next_state, err = self._kernel._lib.leanpy_kernel_goal_resume(
-            self._handle, goal_names,
+            self._handle,
+            goal_names,
         )
         if err:
             raise RuntimeError(f"resume failed: {err}")
@@ -194,7 +208,8 @@ class GoalState:
 
     def continue_with(self, branch: "GoalState") -> "GoalState":
         next_state, err = self._kernel._lib.leanpy_kernel_goal_continue(
-            self._handle, branch._handle,
+            self._handle,
+            branch._handle,
         )
         if err:
             raise RuntimeError(f"continue failed: {err}")
@@ -203,21 +218,28 @@ class GoalState:
     def replay(self, src: "GoalState", src_prime: "GoalState") -> "GoalState":
         """Merge differential ``src → src_prime`` onto ``self`` (the dst)."""
         next_state, err = self._kernel._lib.leanpy_kernel_goal_replay(
-            self._handle, src._handle, src_prime._handle,
+            self._handle,
+            src._handle,
+            src_prime._handle,
         )
         if err:
             raise RuntimeError(f"replay failed: {err}")
         return GoalState(self._kernel, next_state)
 
-    def subsume(self, goal_name: str, candidate_names: list[str]
-                ) -> tuple[str, "GoalState | None", str]:
+    def subsume(
+        self, goal_name: str, candidate_names: list[str]
+    ) -> tuple[str, "GoalState | None", str]:
         """Try to discharge ``goal_name`` using one of ``candidate_names``.
         Returns (``"none"|"subsumed"|"cycle"|"error"``, optional new state,
-        optional name of the candidate that subsumed). """
+        optional name of the candidate that subsumed)."""
         label, next_state, sub_name = self._kernel._lib.leanpy_kernel_goal_subsume(
-            self._handle, goal_name, candidate_names,
+            self._handle,
+            goal_name,
+            candidate_names,
         )
-        next_gs = GoalState(self._kernel, next_state) if next_state is not None else None
+        next_gs = (
+            GoalState(self._kernel, next_state) if next_state is not None else None
+        )
         return label, next_gs, sub_name
 
     def __repr__(self) -> str:

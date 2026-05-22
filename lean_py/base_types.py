@@ -7,7 +7,7 @@ by parsing lean.h. This module provides stable names for downstream use.
 
 from __future__ import annotations
 
-from ctypes import POINTER, _Pointer
+from ctypes import _Pointer
 
 from lean_py._runtime import get_structs, get_constants
 

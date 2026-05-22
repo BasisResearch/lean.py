@@ -24,13 +24,23 @@ from __future__ import annotations
 import ctypes
 import struct as _struct
 from ctypes import (
-    POINTER, c_char_p, c_double, c_int8, c_int16, c_int32, c_int64,
-    c_size_t, c_uint8, c_uint16, c_uint32, c_uint64, c_void_p,
+    c_double,
+    c_int8,
+    c_int16,
+    c_int32,
+    c_int64,
+    c_size_t,
+    c_uint8,
+    c_uint16,
+    c_uint32,
+    c_uint64,
+    c_void_p,
 )
 from typing import Any, Callable
 
 from lean_py._runtime import _ptr_as_int, get_lean_ffi, get_structs
-from lean_py.registry import CtorInfo, FuncInfo, LibraryRegistry, TypeInfo, TypeRepr
+from lean_py.exceptions import LeanError, LeanPyCallbackError, parse_io_error_message
+from lean_py.registry import CtorInfo, LibraryRegistry, TypeInfo, TypeRepr
 
 
 # ============================================================================
@@ -122,8 +132,13 @@ class TypeWrapper:
     """
 
     __slots__ = (
-        "repr", "from_lean", "to_lean", "ctype",
-        "ctor_scalar_size", "from_ctor_scalar", "to_ctor_scalar",
+        "repr",
+        "from_lean",
+        "to_lean",
+        "ctype",
+        "ctor_scalar_size",
+        "from_ctor_scalar",
+        "to_ctor_scalar",
     )
 
     def __init__(
@@ -162,6 +177,7 @@ _PTR_SIZE = ctypes.sizeof(c_void_p)
 # Wrapper for a registered user inductive (`derive_python`)
 # ----------------------------------------------------------------------------
 
+
 class _CtorMeta(type):
     """Metaclass for constructor pattern-match classes.
 
@@ -172,26 +188,34 @@ class _CtorMeta(type):
     """
 
     def __call__(cls, *args):
-        n_fields = len(cls.__match_args__) if hasattr(cls, '__match_args__') else 0
+        n_fields = len(cls.__match_args__) if hasattr(cls, "__match_args__") else 0
         if len(args) != n_fields:
             raise TypeError(
                 f"{cls._type_name}.{cls._ctor_name} expects {n_fields} args, "
-                f"got {len(args)}")
+                f"got {len(args)}"
+            )
         # Convert zero-arg _CtorMeta sentinels to LeanInductiveValue so that
         # all tree nodes are uniformly LeanInductiveValue for pattern matching.
         converted = tuple(
             LeanInductiveValue(a._type_name, a._ctor_name, a._tag, ())
-            if type(a) is _CtorMeta else a
+            if type(a) is _CtorMeta
+            else a
             for a in args
         )
         return LeanInductiveValue(cls._type_name, cls._ctor_name, cls._tag, converted)
 
     def __instancecheck__(cls, instance):
         if isinstance(instance, LeanInductiveValue):
-            return instance.ctor == cls._ctor_name and instance._type_name == cls._type_name
+            return (
+                instance.ctor == cls._ctor_name
+                and instance._type_name == cls._type_name
+            )
         if type(instance) is _CtorMeta:
             # Allow isinstance(Color.red, Color.red) — both are _CtorMeta classes
-            return instance._ctor_name == cls._ctor_name and instance._type_name == cls._type_name
+            return (
+                instance._ctor_name == cls._ctor_name
+                and instance._type_name == cls._type_name
+            )
         return False
 
     def __repr__(cls):
@@ -199,11 +223,16 @@ class _CtorMeta(type):
 
     def __eq__(cls, other):
         if isinstance(other, LeanInductiveValue):
-            return (other._type_name == cls._type_name
-                    and other.ctor == cls._ctor_name
-                    and other.fields == ())
+            return (
+                other._type_name == cls._type_name
+                and other.ctor == cls._ctor_name
+                and other.fields == ()
+            )
         if isinstance(other, _CtorMeta):
-            return cls._type_name == other._type_name and cls._ctor_name == other._ctor_name
+            return (
+                cls._type_name == other._type_name
+                and cls._ctor_name == other._ctor_name
+            )
         return NotImplemented
 
     def __hash__(cls):
@@ -244,23 +273,30 @@ class LeanInductiveValue:
             if idx < len(self.fields):
                 return self.fields[idx]
             raise AttributeError(
-                f"field index {idx} out of range (have {len(self.fields)} fields)")
+                f"field index {idx} out of range (have {len(self.fields)} fields)"
+            )
         raise AttributeError(name)
 
     def __repr__(self) -> str:
         if not self.fields:
             return f"{self._type_name}.{self.ctor}"
-        return f"{self._type_name}.{self.ctor}({', '.join(repr(f) for f in self.fields)})"
+        return (
+            f"{self._type_name}.{self.ctor}({', '.join(repr(f) for f in self.fields)})"
+        )
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, LeanInductiveValue):
             return (self._type_name, self.tag, self.fields) == (
-                other._type_name, other.tag, other.fields,
+                other._type_name,
+                other.tag,
+                other.fields,
             )
         if type(other) is _CtorMeta:
-            return (self._type_name == other._type_name  # type: ignore[attr-defined]
-                    and self.ctor == other._ctor_name  # type: ignore[attr-defined]
-                    and self.fields == ())
+            return (
+                self._type_name == other._type_name  # type: ignore[attr-defined]
+                and self.ctor == other._ctor_name  # type: ignore[attr-defined]
+                and self.fields == ()
+            )
         return NotImplemented
 
     def __hash__(self) -> int:
@@ -313,51 +349,64 @@ def _build_smart_ctors(ffi) -> dict[tuple[str, str], Callable]:
     # -- Lean.Name ----------------------------------------------------------
     _nmks = _sym("lean_name_mk_string")
     if _nmks:
+
         def _name_str(ffi, ObjPtr, ch):
             return _call(_nmks, ch, ObjPtr)
+
         ctors[("Lean.Name", "str")] = _name_str
 
     _nmkn = _sym("lean_name_mk_numeral")
     if _nmkn:
+
         def _name_num(ffi, ObjPtr, ch):
             return _call(_nmkn, ch, ObjPtr)
+
         ctors[("Lean.Name", "num")] = _name_num
 
     # -- Lean.Level ---------------------------------------------------------
-    _lvl = {n: _sym(n) for n in [
-        "lean_level_mk_zero", "lean_level_mk_succ", "lean_level_mk_max",
-        "lean_level_mk_imax", "lean_level_mk_param", "lean_level_mk_mvar",
-    ]}
+    _lvl = {
+        n: _sym(n)
+        for n in [
+            "lean_level_mk_zero",
+            "lean_level_mk_succ",
+            "lean_level_mk_max",
+            "lean_level_mk_imax",
+            "lean_level_mk_param",
+            "lean_level_mk_mvar",
+        ]
+    }
     for cname, sym, nargs in [
         ("zero", "lean_level_mk_zero", 0),
         ("succ", "lean_level_mk_succ", 1),
-        ("max",  "lean_level_mk_max",  2),
+        ("max", "lean_level_mk_max", 2),
         ("imax", "lean_level_mk_imax", 2),
-        ("param","lean_level_mk_param",1),
+        ("param", "lean_level_mk_param", 1),
         ("mvar", "lean_level_mk_mvar", 1),
     ]:
         fn = _lvl.get(sym)
         if fn:
+
             def _mk(ffi, ObjPtr, ch, _fn=fn, _n=nargs):
                 return _call(_fn, ch[:_n], ObjPtr)
+
             ctors[("Lean.Level", cname)] = _mk
 
     # -- Lean.Expr ----------------------------------------------------------
     # BinderInfo / Bool trailing args are passed as uint8 (the unboxed
     # scalar value), NOT as lean_object*.
     _expr = {
-        "bvar":    (_sym("lean_expr_mk_bvar"),    1, False),
-        "fvar":    (_sym("lean_expr_mk_fvar"),    1, False),
-        "mvar":    (_sym("lean_expr_mk_mvar"),    1, False),
-        "sort":    (_sym("lean_expr_mk_sort"),    1, False),
-        "const":   (_sym("lean_expr_mk_const"),   2, False),
-        "app":     (_sym("lean_expr_mk_app"),     2, False),
-        "lam":     (_sym("lean_expr_mk_lambda"),  4, True),
-        "forallE": (_sym("lean_expr_mk_forall"),  4, True),
-        "letE":    (_sym("lean_expr_mk_let"),     5, True),
-        "lit":     (_sym("lean_expr_mk_lit"),     1, False),
-        "mdata":   (_sym("lean_expr_mk_mdata"),   2, False),
-        "proj":    (_sym("lean_expr_mk_proj"),    3, False),
+        "bvar": (_sym("lean_expr_mk_bvar"), 1, False),
+        "fvar": (_sym("lean_expr_mk_fvar"), 1, False),
+        "mvar": (_sym("lean_expr_mk_mvar"), 1, False),
+        "sort": (_sym("lean_expr_mk_sort"), 1, False),
+        "const": (_sym("lean_expr_mk_const"), 2, False),
+        "app": (_sym("lean_expr_mk_app"), 2, False),
+        "lam": (_sym("lean_expr_mk_lambda"), 4, True),
+        "forallE": (_sym("lean_expr_mk_forall"), 4, True),
+        "letE": (_sym("lean_expr_mk_let"), 5, True),
+        "lit": (_sym("lean_expr_mk_lit"), 1, False),
+        "mdata": (_sym("lean_expr_mk_mdata"), 2, False),
+        "proj": (_sym("lean_expr_mk_proj"), 3, False),
     }
     for cname, (fn, nargs, scalar_tail) in _expr.items():
         if fn is None:
@@ -368,14 +417,16 @@ def _build_smart_ctors(ffi) -> dict[tuple[str, str], Callable]:
             for i, c in enumerate(ch[:_n]):
                 if _st and i == _n - 1:
                     # Trailing BinderInfo / Bool — unbox to uint8.
-                    c_args.append(ffi.lean_unbox(c) if ffi.lean_is_scalar(c)
-                                  else _ptr_as_int(c))
+                    c_args.append(
+                        ffi.lean_unbox(c) if ffi.lean_is_scalar(c) else _ptr_as_int(c)
+                    )
                 else:
                     c_args.append(_ptr_as_int(c))
             _fn.restype = c_void_p
             _fn.argtypes = [c_void_p] * len(c_args)
             raw = _fn(*c_args)
             return ctypes.cast(c_void_p(raw), ObjPtr)
+
         ctors[("Lean.Expr", cname)] = _mk
 
     return ctors
@@ -583,7 +634,9 @@ class Marshaller:
 
     # -- public --------------------------------------------------------------
 
-    def decode_lean_obj(self, type_name: str, lean_obj: "LeanObj") -> LeanInductiveValue:
+    def decode_lean_obj(
+        self, type_name: str, lean_obj: "LeanObj"
+    ) -> LeanInductiveValue:
         """Decode a ``LeanObj`` (raw ``lean_object*``) as a registered inductive.
 
         This is the entry point for Path B (tactic): Lean wraps an ``Expr``
@@ -615,19 +668,29 @@ class Marshaller:
             # Unit is encoded as the boxed scalar 0 (the `()` ctor).
             def from_lean(p):
                 return None
+
             def to_lean(_):
                 return ffi.lean_box(0)
+
             return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
         if k == "bool":
+
             def from_lean(p):
                 return _ctor_tag(ffi, p) == 1
+
             def to_lean(b):
                 return ffi.lean_box(1 if b else 0)
-            return TypeWrapper(t, from_lean, to_lean, c_uint8,
-                               ctor_scalar_size=1,
-                               from_ctor_scalar=lambda raw: raw == 1,
-                               to_ctor_scalar=lambda b: 1 if b else 0)
+
+            return TypeWrapper(
+                t,
+                from_lean,
+                to_lean,
+                c_uint8,
+                ctor_scalar_size=1,
+                from_ctor_scalar=lambda raw: raw == 1,
+                to_ctor_scalar=lambda b: 1 if b else 0,
+            )
 
         if k == "nat":
             # Small values are boxed scalars; use lean_uint64_of_nat at the FFI level.
@@ -635,14 +698,20 @@ class Marshaller:
                 v = ffi.lean_uint64_of_nat(p)
                 ffi.lean_dec(p)
                 return v
+
             def to_lean(n):
                 if n < 0:
                     raise ValueError("Nat must be ≥ 0")
-                return ffi.lean_unsigned_to_nat(ctypes.c_uint(n & 0xFFFFFFFF).value) \
-                    if n < (1 << 32) else ffi.lean_uint64_to_nat(ctypes.c_uint64(n).value)
+                return (
+                    ffi.lean_unsigned_to_nat(ctypes.c_uint(n & 0xFFFFFFFF).value)
+                    if n < (1 << 32)
+                    else ffi.lean_uint64_to_nat(ctypes.c_uint64(n).value)
+                )
+
             return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
         if k == "int":
+
             def from_lean(p):
                 # Use lean_scalar_to_int / lean_int_to_int64 round-trip.
                 if ffi.lean_is_scalar(p):
@@ -651,33 +720,48 @@ class Marshaller:
                     v = ffi.lean_int64_of_int(p)
                 ffi.lean_dec(p)
                 return v
+
             def to_lean(n):
                 return ffi.lean_int64_to_int(ctypes.c_int64(n).value)
+
             return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
         if k == "string":
+
             def from_lean(p):
                 s = self._lean_string_to_py(p)
                 ffi.lean_dec(p)
                 return s
+
             def to_lean(s):
                 return self._py_to_lean_string(s)
+
             return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
         if k == "float":
+
             def from_lean(p):
                 # IEEE doubles are passed by value, not pointer; this path is
                 # only used when float appears in a generic context (boxed).
                 v = ffi.lean_unbox_float(p)
                 ffi.lean_dec(p)
                 return v
+
             def to_lean(f):
                 return ffi.lean_box_float(c_double(f).value)
+
             return TypeWrapper(
-                t, from_lean, to_lean, c_double,
+                t,
+                from_lean,
+                to_lean,
+                c_double,
                 ctor_scalar_size=8,
-                from_ctor_scalar=lambda raw: _struct.unpack('d', _struct.pack('Q', raw))[0],
-                to_ctor_scalar=lambda f: _struct.unpack('Q', _struct.pack('d', float(f)))[0],
+                from_ctor_scalar=lambda raw: _struct.unpack(
+                    "d", _struct.pack("Q", raw)
+                )[0],
+                to_ctor_scalar=lambda f: _struct.unpack(
+                    "Q", _struct.pack("d", float(f))
+                )[0],
             )
 
         if k == "uint":
@@ -685,7 +769,10 @@ class Marshaller:
             byte_sz = bits // 8
             ct = {8: c_uint8, 16: c_uint16, 32: c_uint32, 64: c_uint64}[bits]
             return TypeWrapper(
-                t, lambda v: int(v), lambda v: ct(int(v)).value, ct,
+                t,
+                lambda v: int(v),
+                lambda v: ct(int(v)).value,
+                ct,
                 ctor_scalar_size=byte_sz,
                 from_ctor_scalar=lambda raw: int(raw),
                 to_ctor_scalar=lambda v, _ct=ct: _ct(int(v)).value,  # type: ignore[misc,return-value]
@@ -697,10 +784,15 @@ class Marshaller:
             ct = {8: c_int8, 16: c_int16, 32: c_int32, 64: c_int64}[bits]
             uct = {8: c_uint8, 16: c_uint16, 32: c_uint32, 64: c_uint64}[bits]
             return TypeWrapper(
-                t, lambda v: int(v), lambda v: ct(int(v)).value, ct,
+                t,
+                lambda v: int(v),
+                lambda v: ct(int(v)).value,
+                ct,
                 ctor_scalar_size=byte_sz,
                 from_ctor_scalar=lambda raw, _ct=ct: int(_ct(raw).value),  # type: ignore[misc,return-value]
-                to_ctor_scalar=lambda v, _uct=uct, _ct=ct: _uct(_ct(int(v)).value).value,  # type: ignore[misc,return-value]
+                to_ctor_scalar=lambda v, _uct=uct, _ct=ct: (  # type: ignore[misc]
+                    _uct(_ct(int(v)).value).value
+                ),  # type: ignore[return-value]
             )
 
         if k == "char":
@@ -711,12 +803,17 @@ class Marshaller:
                     return chr(n)
                 ffi.lean_dec(p)
                 raise RuntimeError("Char value was not scalar")
+
             def to_lean(c):
                 if isinstance(c, str) and len(c) == 1:
                     c = ord(c)
                 return ffi.lean_box(int(c))
+
             return TypeWrapper(
-                t, from_lean, to_lean, c_uint32,
+                t,
+                from_lean,
+                to_lean,
+                c_uint32,
                 ctor_scalar_size=4,
                 from_ctor_scalar=lambda raw: chr(raw),
                 to_ctor_scalar=lambda c: ord(c) if isinstance(c, str) else int(c),
@@ -724,16 +821,20 @@ class Marshaller:
 
         if k == "array":
             inner = self.wrapper_for(t.elem)  # type: ignore[arg-type]
+
             def from_lean(p):
                 xs = self._lean_array_to_py(p, inner)
                 ffi.lean_dec(p)
                 return xs
+
             def to_lean(xs):
                 return self._py_to_lean_array(xs, inner)
+
             return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
         if k == "list":
             inner = self.wrapper_for(t.elem)  # type: ignore[arg-type]
+
             def from_lean(p):
                 # List α: ctor 0 is `nil`, ctor 1 is `cons head tail`.
                 out = []
@@ -748,6 +849,7 @@ class Marshaller:
                     cur = _ctor_get(ffi, cur, 1)
                 ffi.lean_dec(p)
                 return out
+
             def to_lean(xs):
                 items = list(xs)
                 # Build right-to-left.
@@ -758,10 +860,12 @@ class Marshaller:
                     ffi.lean_ctor_set(cell, 1, acc)
                     acc = cell
                 return acc
+
             return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
         if k == "option":
             inner = self.wrapper_for(t.elem)  # type: ignore[arg-type]
+
             def from_lean(p):
                 tag = _ctor_tag(ffi, p)
                 if tag == 0:
@@ -772,34 +876,42 @@ class Marshaller:
                 v = inner.from_lean(inner_ptr)
                 ffi.lean_dec(p)
                 return v
+
             def to_lean(v):
                 if v is None:
                     return ffi.lean_box(0)
                 cell = ffi.lean_alloc_ctor(1, 1, 0)
                 ffi.lean_ctor_set(cell, 0, inner.to_lean(v))
                 return cell
+
             return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
         if k == "prod":
             wa = self.wrapper_for(t.a)  # type: ignore[arg-type]
             wb = self.wrapper_for(t.b)  # type: ignore[arg-type]
+
             def from_lean(p):
                 a_ptr = _ctor_get(ffi, p, 0)
                 b_ptr = _ctor_get(ffi, p, 1)
-                ffi.lean_inc(a_ptr); ffi.lean_inc(b_ptr)
-                a = wa.from_lean(a_ptr); b = wb.from_lean(b_ptr)
+                ffi.lean_inc(a_ptr)
+                ffi.lean_inc(b_ptr)
+                a = wa.from_lean(a_ptr)
+                b = wb.from_lean(b_ptr)
                 ffi.lean_dec(p)
                 return (a, b)
+
             def to_lean(pr):
                 a, b = pr
                 cell = ffi.lean_alloc_ctor(0, 2, 0)
                 ffi.lean_ctor_set(cell, 0, wa.to_lean(a))
                 ffi.lean_ctor_set(cell, 1, wb.to_lean(b))
                 return cell
+
             return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
         if k == "io":
             inner = self.wrapper_for(t.elem)  # type: ignore[arg-type]
+
             # IO is encoded as Except IO.Error α (where the second field
             # is the new RealWorld state). On Ok, m_objs[0] holds the
             # value (owned by the IO ctor); we inc to take ownership and
@@ -808,9 +920,9 @@ class Marshaller:
                 tag = _ctor_tag(ffi, p)
                 if tag == 0:
                     val_ptr = _ctor_get(ffi, p, 0)
-                    ffi.lean_inc(val_ptr)   # +1 (now we share ownership)
-                    ffi.lean_dec(p)          # drop the IO ctor → val_ptr's
-                                             #   shared ownership stays at 1
+                    ffi.lean_inc(val_ptr)  # +1 (now we share ownership)
+                    ffi.lean_dec(p)  # drop the IO ctor → val_ptr's
+                    #   shared ownership stays at 1
                     return inner.from_lean(val_ptr)  # consumes val_ptr
                 # error case: decode the IO.Error ctor and raise a typed
                 # exception (LeanError or LeanPyCallbackError).
@@ -819,12 +931,14 @@ class Marshaller:
                 exc = self._build_io_exception(err_ptr)
                 ffi.lean_dec(p)
                 raise exc
+
             def to_lean(v):
                 # Wrap a value as an IO Ok result.
                 cell = ffi.lean_alloc_ctor(0, 2, 0)
                 ffi.lean_ctor_set(cell, 0, inner.to_lean(v))
                 ffi.lean_ctor_set(cell, 1, ffi.lean_box(0))
                 return cell
+
             return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
         if k == "named":
@@ -840,6 +954,7 @@ class Marshaller:
                     scalar_sz, ct = 2, c_uint16
                 else:
                     scalar_sz, ct = 4, c_uint32
+
                 def from_lean(tag, _ti=ti):  # type: ignore[misc]
                     if isinstance(tag, int):
                         n = tag
@@ -851,6 +966,7 @@ class Marshaller:
                     if ctor is None:
                         raise RuntimeError(f"unknown {_ti.name} tag {n}")
                     return LeanInductiveValue(_ti.name, ctor.name, n, ())
+
                 def to_lean(v):
                     if isinstance(v, LeanInductiveValue):
                         return ffi.lean_box(v.tag)
@@ -859,11 +975,13 @@ class Marshaller:
                     if isinstance(v, int):
                         return ffi.lean_box(v)
                     raise TypeError(f"cannot encode {v!r} as enum {ti.name}")
+
                 def _from_scalar(raw, _ti=ti):
                     ctor = next((c for c in _ti.ctors if c.tag == raw), None)
                     if ctor is None:
                         raise RuntimeError(f"unknown {_ti.name} tag {raw}")
                     return LeanInductiveValue(_ti.name, ctor.name, raw, ())
+
                 def _to_scalar(v):
                     if isinstance(v, LeanInductiveValue):
                         return v.tag
@@ -872,18 +990,25 @@ class Marshaller:
                     if isinstance(v, int):
                         return v
                     raise TypeError(f"cannot encode {v!r} as enum scalar")
+
                 return TypeWrapper(
-                    t, from_lean, to_lean, ct,
+                    t,
+                    from_lean,
+                    to_lean,
+                    ct,
                     ctor_scalar_size=scalar_sz,
                     from_ctor_scalar=_from_scalar,
                     to_ctor_scalar=_to_scalar,
                 )
+
             def from_lean(p):
                 v = self._decode_inductive(ti, p)
                 ffi.lean_dec(p)
                 return v
+
             def to_lean(v):
                 return self._encode_inductive(ti, v)
+
             return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
         if k == "pyobject":
@@ -962,6 +1087,7 @@ class Marshaller:
                 "supported; convert via LeanPy.Python.Py.ofString / etc. on "
                 "the Lean side, or pass through a LeanObj handle"
             )
+
         return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
     def _opaque_wrapper(self, t: TypeRepr) -> TypeWrapper:
@@ -979,8 +1105,10 @@ class Marshaller:
         """
         ObjPtr = self._lean_object_ptr
         ffi = self.ffi
+
         def from_lean(p):
             return LeanObj(p, owned=True)
+
         def to_lean(v):
             if isinstance(v, LeanObj):
                 p = v.ptr
@@ -988,6 +1116,7 @@ class Marshaller:
                     ffi.lean_inc(p)
                 return p
             return v
+
         return TypeWrapper(t, from_lean, to_lean, ObjPtr)
 
     # Lean's `IO.Error` inductive (Init/System/IOError.lean), Lean 4.25.x:
@@ -1000,16 +1129,16 @@ class Marshaller:
     # non-userError variants that's typically the filename, so
     # `_format` shows it via `context["raw_field0"]`.
     _IO_ERROR_TAGS = {
-        0:  "alreadyExists",
-        1:  "otherError",
-        2:  "resourceBusy",
-        3:  "resourceVanished",
-        4:  "unsupportedOperation",
-        5:  "hardwareFault",
-        6:  "unsatisfiedConstraints",
-        7:  "illegalOperation",
-        8:  "protocolError",
-        9:  "timeExpired",
+        0: "alreadyExists",
+        1: "otherError",
+        2: "resourceBusy",
+        3: "resourceVanished",
+        4: "unsupportedOperation",
+        5: "hardwareFault",
+        6: "unsatisfiedConstraints",
+        7: "illegalOperation",
+        8: "protocolError",
+        9: "timeExpired",
         10: "interrupted",
         11: "noFileOrDirectory",
         12: "invalidArgument",
@@ -1042,10 +1171,6 @@ class Marshaller:
         Python exception type is visible. Other ctors map to `LeanError`
         with the appropriate `kind`.
         """
-        from lean_py.exceptions import (
-            LeanError, LeanPyCallbackError, parse_io_error_message,
-        )
-
         try:
             tag = _ctor_tag(self.ffi, ptr)
         except Exception:
@@ -1068,8 +1193,11 @@ class Marshaller:
         # Other ctors carry varying field shapes. Capture field0 as the
         # primary descriptor and leave a structured `context` so callers
         # can still access it.
-        return LeanError(kind, field0 or f"<{kind} (no message)>",
-                         context={"raw_field0": field0} if field0 else None)
+        return LeanError(
+            kind,
+            field0 or f"<{kind} (no message)>",
+            context={"raw_field0": field0} if field0 else None,
+        )
 
     def _format_io_error(self, ptr: Any) -> str:
         """Legacy stringification — preserved for callers that just want
