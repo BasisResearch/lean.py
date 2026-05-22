@@ -1,8 +1,8 @@
 # Programming Z3 in Python, backed by Lean 4
 
-Automated theorem provers have matured to the point where they can verify real software: OS kernels, compilers, cryptographic libraries, distributed protocols. The most trustworthy among them are kernel-checked proof assistants like Lean 4, where every proof is independently verified by a small trusted core. The trade-off is accessibility. Writing propositions in Lean requires learning a dependently-typed functional language, configuring a Lake build system, and mastering a tactic language. For a Python programmer who wants to check whether `x + y > 0` follows from `x > 0` and `y > 0`, that is a steep price.
+Lean 4 is a general-purpose symbolic reasoning engine. Its tactic library covers linear arithmetic (`omega`), congruence closure with E-matching (`grind`), propositional decidability (`decide`), and rewriting (`simp`), and the system is designed to be extended with new sorts, constructors, and decision procedures. Every proof is independently checked by a small trusted kernel, so the Python side never needs to trust the automation; it trusts the checker. The overhead of learning Lean's type theory and build system has kept most of this machinery out of reach for Python programmers.
 
-`lean_py.z3` eliminates it. The library exposes the z3py API, compiles propositions into Lean 4 terms under the hood, dispatches them to Lean's `grind` tactic, and type-checks the resulting proof in the kernel.
+`lean_py.z3` wraps Lean's tactic engine in the z3py API. Propositions are written in the familiar `Int`, `Bool`, `Function`, `ForAll` vocabulary. Under the hood, each expression compiles to a Lean 4 term, gets dispatched to the tactic engine, and the resulting proof is kernel-checked.
 
 ```bash
 uv pip install "lean_py @ git+https://github.com/BasisResearch/lean.py"
@@ -86,7 +86,7 @@ solve(x > 0, x < 0)  # unsat
 
 ## Arithmetic
 
-With the solver in hand, we can move to the bread and butter of formal verification: arithmetic reasoning. Integer and real arithmetic both work, with all the Python operators you would expect.
+Integer and real arithmetic both work, with all the Python operators you would expect.
 
 ```python
 x, y, z = Ints('x y z')
@@ -384,7 +384,7 @@ prove(IsMember(IntVal(5), Singleton(IntVal(5))))
 
 ## Algebraic Datatypes
 
-All the sorts so far are built-in: integers, booleans, bit-vectors, arrays. Algebraic datatypes let you define your own. In z3py they are backed by Z3's internal datatype solver. In `lean_py.z3` they compile to real Lean 4 inductive types, which means the kernel gives you constructor injectivity, disjointness of constructors, and exhaustive case analysis for free. This is where the Lean backend pays off most visibly.
+All the sorts so far are built-in: integers, booleans, bit-vectors, arrays. Algebraic datatypes let you define your own. In z3py they are backed by Z3's internal datatype solver. In `lean_py.z3` they compile to real Lean 4 inductive types, which means the kernel gives you constructor injectivity, disjointness of constructors, and exhaustive case analysis for free.
 
 ### Enumerations
 
@@ -920,7 +920,7 @@ set_kernel(k)
 
 Lean's `grind`, `omega`, `decide`, `simp`, and the other 30+ registered tactics cover a broad range of automated reasoning: (1) propositional logic, complete via `decide`, (2) linear integer and natural number arithmetic, complete via `omega`, (3) congruence closure with uninterpreted functions via `grind`, (4) datatype reasoning including constructor injectivity, disjointness, and exhaustive case splits, (5) quantified formulas that `grind` can instantiate, (6) bit-vector reasoning when reducible to bounded arithmetic, and (7) string and regex membership proofs.
 
-Lean proves theorems. It does not find satisfying assignments. `Solver.model()` raises `NotImplementedError`, `check()` returns `unsat` or `unknown` (never `sat`), and `Optimize` is a placeholder. Nonlinear arithmetic involving products of two variables may time out. Mutually recursive datatypes are not yet supported. For constraint satisfaction and model finding, you still want Z3 proper.
+Lean proves theorems rather than finding satisfying assignments. `Solver.model()` raises `NotImplementedError`, `check()` returns `unsat` or `unknown` (never `sat`), and `Optimize` is a placeholder. Nonlinear arithmetic involving products of two variables may time out. Mutually recursive datatypes are not yet supported. For constraint satisfaction and model finding, you still want Z3 proper.
 
 
 ## Comparison with z3py
