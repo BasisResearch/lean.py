@@ -78,6 +78,16 @@ class InductiveASTSort:
     name: str
 
 
+@dataclass(frozen=True)
+class CharASTSort:
+    pass
+
+
+@dataclass(frozen=True)
+class SeqASTSort:
+    elem: ASTSort
+
+
 ASTSort = Union[
     PropSort,
     IntASTSort,
@@ -91,6 +101,8 @@ ASTSort = Union[
     FpASTSort,
     FinDomainASTSort,
     InductiveASTSort,
+    CharASTSort,
+    SeqASTSort,
 ]
 
 # ---------------------------------------------------------------------------
@@ -461,6 +473,81 @@ class InductiveRecognizerNode:
     arg: ASTNode
 
 
+# ---------------------------------------------------------------------------
+# Char expression nodes
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CharLit:
+    val: int
+
+
+@dataclass(frozen=True)
+class CharToNatNode:
+    arg: ASTNode
+
+
+@dataclass(frozen=True)
+class CharFromBvNode:
+    arg: ASTNode
+
+
+@dataclass(frozen=True)
+class CharIsDigitNode:
+    arg: ASTNode
+
+
+# ---------------------------------------------------------------------------
+# Sequence expression nodes
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SeqEmptyNode:
+    elem_sort: ASTSort
+
+
+@dataclass(frozen=True)
+class SeqUnitNode:
+    arg: ASTNode
+
+
+@dataclass(frozen=True)
+class SeqLenNode:
+    arg: ASTNode
+
+
+@dataclass(frozen=True)
+class SeqConcatNode:
+    lhs: ASTNode
+    rhs: ASTNode
+
+
+@dataclass(frozen=True)
+class SeqContainsNode:
+    haystack: ASTNode
+    needle: ASTNode
+
+
+@dataclass(frozen=True)
+class SeqPrefixOfNode:
+    prefix_: ASTNode
+    s: ASTNode
+
+
+@dataclass(frozen=True)
+class SeqSuffixOfNode:
+    suffix_: ASTNode
+    s: ASTNode
+
+
+@dataclass(frozen=True)
+class SeqNthNode:
+    s: ASTNode
+    idx: ASTNode
+
+
 ASTNode = Union[
     Var,
     IntLit,
@@ -511,6 +598,18 @@ ASTNode = Union[
     InductiveCtorNode,
     InductiveAccessorNode,
     InductiveRecognizerNode,
+    CharLit,
+    CharToNatNode,
+    CharFromBvNode,
+    CharIsDigitNode,
+    SeqEmptyNode,
+    SeqUnitNode,
+    SeqLenNode,
+    SeqConcatNode,
+    SeqContainsNode,
+    SeqPrefixOfNode,
+    SeqSuffixOfNode,
+    SeqNthNode,
 ]
 
 __all__ = [
@@ -585,5 +684,21 @@ __all__ = [
     "InductiveCtorNode",
     "InductiveAccessorNode",
     "InductiveRecognizerNode",
+    # Char nodes
+    "CharASTSort",
+    "CharLit",
+    "CharToNatNode",
+    "CharFromBvNode",
+    "CharIsDigitNode",
+    # Seq nodes
+    "SeqASTSort",
+    "SeqEmptyNode",
+    "SeqUnitNode",
+    "SeqLenNode",
+    "SeqConcatNode",
+    "SeqContainsNode",
+    "SeqPrefixOfNode",
+    "SeqSuffixOfNode",
+    "SeqNthNode",
     "ASTNode",
 ]

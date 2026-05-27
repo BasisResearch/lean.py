@@ -85,13 +85,28 @@ from lean_py.z3._ast import (
     InductiveCtorNode,
     InductiveAccessorNode,
     InductiveRecognizerNode,
+    CharASTSort,
+    CharLit,
+    CharToNatNode,
+    CharFromBvNode,
+    CharIsDigitNode,
+    SeqASTSort,
+    SeqEmptyNode,
+    SeqUnitNode,
+    SeqLenNode,
+    SeqConcatNode,
+    SeqContainsNode,
+    SeqPrefixOfNode,
+    SeqSuffixOfNode,
+    SeqNthNode,
 )
 
 
 def _is_literal(node: ASTNode) -> bool:
     """True for ground literal AST nodes (no variables/operations)."""
     return isinstance(
-        node, (IntLit, NatLit, BoolLit, BvLit, StringLit, FpLitNode, FinDomainLit)
+        node,
+        (IntLit, NatLit, BoolLit, BvLit, StringLit, FpLitNode, FinDomainLit, CharLit),
     )
 
 
@@ -1106,6 +1121,10 @@ def Const(name: str, sort: SortRef) -> ExprRef:
         return ArrayRef(_AstVar(name), sort, v)
     if isinstance(sort, StringSortRef):
         return StringRef(_AstVar(name), v)
+    if isinstance(sort, CharSortRef):
+        return CharRef(_AstVar(name), v)
+    if isinstance(sort, SeqSortRef):
+        return SeqRef(_AstVar(name), sort, v)
     if isinstance(sort, DatatypeSortRef):
         return DatatypeRef(_AstVar(name), sort, v)
     return ExprRef(_AstVar(name), sort, v)
@@ -1133,6 +1152,9 @@ def RealVal(n: int | float | str) -> ArithRef:
         num, den = n.as_integer_ratio()
         return RatNumRef(num, den)
     if isinstance(n, str):
+        if "/" in n:
+            num, den = n.split("/", 1)
+            return RatNumRef(int(num.strip()), int(den.strip()))
         n = float(n) if "." in n or "e" in n.lower() else int(n)
         return RealVal(n)
     return ArithRef(ToRealNode(IntLit(n)), RealSort())
@@ -1481,6 +1503,10 @@ def _sort_repr(s: ASTSort) -> str:
         return f"({_sort_repr(s.dom)} \u2192 {_sort_repr(s.cod)})"
     if isinstance(s, InductiveASTSort):
         return s.name
+    if isinstance(s, CharASTSort):
+        return "Char"
+    if isinstance(s, SeqASTSort):
+        return f"(Seq {_sort_repr(s.elem)})"
     return str(s)
 
 
@@ -2000,7 +2026,7 @@ def BVAddNoOverflow(a: BitVecRef, b: BitVecRef, signed: bool = False) -> BoolRef
         eb = ZeroExt(1, b)
         s = ea + eb
         upper = BitVecVal((1 << w) - 1, w + 1)
-        return s <= upper
+        return ULE(s, upper)
 
 
 def BVAddNoUnderflow(a: BitVecRef, b: BitVecRef) -> BoolRef:
@@ -2062,7 +2088,7 @@ def BVMulNoOverflow(a: BitVecRef, b: BitVecRef, signed: bool = False) -> BoolRef
         eb = ZeroExt(w, b)
         p = ea * eb
         upper = BitVecVal((1 << w) - 1, 2 * w)
-        return p <= upper
+        return ULE(p, upper)
 
 
 def BVMulNoUnderflow(a: BitVecRef, b: BitVecRef) -> BoolRef:
@@ -2295,23 +2321,31 @@ def StringVal(s: str) -> StringRef:
     return StringRef(StringLit(s))
 
 
-def Length(s: StringRef) -> ArithRef:
-    """String length."""
+def Length(s: StringRef | SeqRef) -> ArithRef:
+    """String or sequence length."""
+    if isinstance(s, SeqRef):
+        return ArithRef(SeqLenNode(s._ast), IntSort(), s._vars)
     return ArithRef(StrLenNode(s._ast), IntSort(), s._vars)
 
 
-def Contains(s: StringRef, t: StringRef) -> BoolRef:
+def Contains(s: StringRef | SeqRef, t: StringRef | SeqRef) -> BoolRef:
     """Check if s contains t."""
+    if isinstance(s, SeqRef) or isinstance(t, SeqRef):
+        return BoolRef(SeqContainsNode(s._ast, t._ast), _merge(s._vars, t._vars))
     return BoolRef(StrContainsNode(s._ast, t._ast), _merge(s._vars, t._vars))
 
 
-def PrefixOf(pre: StringRef, s: StringRef) -> BoolRef:
+def PrefixOf(pre: StringRef | SeqRef, s: StringRef | SeqRef) -> BoolRef:
     """Check if pre is a prefix of s."""
+    if isinstance(pre, SeqRef) or isinstance(s, SeqRef):
+        return BoolRef(SeqPrefixOfNode(pre._ast, s._ast), _merge(pre._vars, s._vars))
     return BoolRef(StrPrefixOfNode(pre._ast, s._ast), _merge(pre._vars, s._vars))
 
 
-def SuffixOf(suf: StringRef, s: StringRef) -> BoolRef:
+def SuffixOf(suf: StringRef | SeqRef, s: StringRef | SeqRef) -> BoolRef:
     """Check if suf is a suffix of s."""
+    if isinstance(suf, SeqRef) or isinstance(s, SeqRef):
+        return BoolRef(SeqSuffixOfNode(suf._ast, s._ast), _merge(suf._vars, s._vars))
     return BoolRef(StrSuffixOfNode(suf._ast, s._ast), _merge(suf._vars, s._vars))
 
 
@@ -2697,6 +2731,28 @@ def _ast_children(node: ASTNode) -> list[ASTNode]:
         return [node.s, node.re]
     if isinstance(node, ReRangeNode):
         return []
+    # Char nodes
+    if isinstance(node, CharLit):
+        return []
+    if isinstance(node, (CharToNatNode, CharFromBvNode, CharIsDigitNode)):
+        return [node.arg]
+    # Seq nodes
+    if isinstance(node, SeqEmptyNode):
+        return []
+    if isinstance(node, SeqUnitNode):
+        return [node.arg]
+    if isinstance(node, SeqLenNode):
+        return [node.arg]
+    if isinstance(node, SeqConcatNode):
+        return [node.lhs, node.rhs]
+    if isinstance(node, SeqContainsNode):
+        return [node.haystack, node.needle]
+    if isinstance(node, SeqPrefixOfNode):
+        return [node.prefix_, node.s]
+    if isinstance(node, SeqSuffixOfNode):
+        return [node.suffix_, node.s]
+    if isinstance(node, SeqNthNode):
+        return [node.s, node.idx]
     return []
 
 
@@ -2803,6 +2859,10 @@ def _make_typed_expr(
         return BitVecRef(ast, sort, vars)
     if isinstance(sort, StringSortRef):
         return StringRef(ast, vars)
+    if isinstance(sort, CharSortRef):
+        return CharRef(ast, vars)
+    if isinstance(sort, SeqSortRef):
+        return SeqRef(ast, sort, vars)
     return ExprRef(ast, sort, vars)
 
 
@@ -2827,6 +2887,10 @@ def _sort_from_ast_sort(ast_sort: ASTSort) -> SortRef:
         )
     if isinstance(ast_sort, UninterpASTSort):
         return UninterpretedSortRef(ast_sort)
+    if isinstance(ast_sort, CharASTSort):
+        return CharSortRef(ast_sort)
+    if isinstance(ast_sort, SeqASTSort):
+        return SeqSortRef(_sort_from_ast_sort(ast_sort.elem))
     return SortRef(ast_sort)
 
 
@@ -3795,38 +3859,77 @@ def is_finite_set_sort(s: object) -> bool:
 # ---------------------------------------------------------------------------
 
 
-class _CharSortRef(SortRef):
+class CharSortRef(SortRef):
     """Character sort."""
 
     pass
 
 
-def CharSort(ctx: Context | None = None) -> _CharSortRef:
-    return _CharSortRef(UninterpASTSort("Char"))
+# Keep old name as alias
+_CharSortRef = CharSortRef
 
 
-def CharVal(ch: str | int, ctx: Context | None = None) -> ExprRef:
+class CharRef(ExprRef):
+    """Character expression."""
+
+    __slots__ = ()
+
+    def __init__(
+        self,
+        ast: ASTNode,
+        vars: frozenset[tuple[str, ASTSort]] = frozenset(),
+    ) -> None:
+        super().__init__(ast, CharSortRef(CharASTSort()), vars)
+
+    def to_int(self) -> ArithRef:
+        """Convert char to integer (code point)."""
+        return CharToInt(self)
+
+    def to_bv(self) -> BitVecRef:
+        """Convert char to 21-bit bitvector."""
+        return CharToBv(self)
+
+    def is_digit(self) -> BoolRef:
+        """Check if char is a digit."""
+        return CharIsDigit(self)
+
+    def __le__(self, other: object) -> BoolRef:
+        if isinstance(other, ExprRef):
+            lhs = CharToNatNode(self._ast)
+            rhs = CharToNatNode(other._ast)
+            return BoolRef(
+                BinOpNode(BinOp.LE, lhs, rhs),
+                _merge(self._vars, other._vars),
+            )
+        return NotImplemented
+
+
+def CharSort(ctx: Context | None = None) -> CharSortRef:
+    return CharSortRef(CharASTSort())
+
+
+def CharVal(ch: str | int, ctx: Context | None = None) -> CharRef:
     if isinstance(ch, str):
         ch = ord(ch[0]) if ch else 0
-    return ExprRef(_AstVar(f"char_{ch}"), CharSort(), frozenset())
+    return CharRef(CharLit(ch))
 
 
-def CharFromBv(bv: BitVecRef, ctx: Context | None = None) -> ExprRef:
-    return ExprRef(AppNode(_AstVar("char.from_bv"), (bv._ast,)), CharSort(), bv._vars)
+def CharFromBv(bv: BitVecRef, ctx: Context | None = None) -> CharRef:
+    return CharRef(CharFromBvNode(bv._ast), bv._vars)
 
 
 def CharToBv(ch: ExprRef, ctx: Context | None = None) -> BitVecRef:
     return BitVecRef(
-        AppNode(_AstVar("char.to_bv"), (ch._ast,)), BitVecSort(8), ch._vars
+        CharToNatNode(ch._ast), BitVecSort(21), ch._vars
     )
 
 
 def CharToInt(ch: ExprRef, ctx: Context | None = None) -> ArithRef:
-    return ArithRef(AppNode(_AstVar("char.to_int"), (ch._ast,)), IntSort(), ch._vars)
+    return ArithRef(CharToNatNode(ch._ast), IntSort(), ch._vars)
 
 
 def CharIsDigit(ch: ExprRef, ctx: Context | None = None) -> BoolRef:
-    return BoolRef(AppNode(_AstVar("char.is_digit"), (ch._ast,)), ch._vars)
+    return BoolRef(CharIsDigitNode(ch._ast), ch._vars)
 
 
 # ---------------------------------------------------------------------------
@@ -3834,11 +3937,72 @@ def CharIsDigit(ch: ExprRef, ctx: Context | None = None) -> BoolRef:
 # ---------------------------------------------------------------------------
 
 
-def SeqSort(s: SortRef) -> SortRef:
+class SeqSortRef(SortRef):
+    """Sequence sort."""
+
+    __slots__ = ("_elem",)
+
+    def __init__(self, elem: SortRef) -> None:
+        super().__init__(SeqASTSort(elem._ast_sort))
+        self._elem = elem
+
+    def basis(self) -> SortRef:
+        """Return the element sort."""
+        return self._elem
+
+    def is_string(self) -> bool:
+        """True if this is Seq(Char), i.e. String."""
+        return isinstance(self._elem, CharSortRef)
+
+
+class SeqRef(ExprRef):
+    """Sequence expression."""
+
+    __slots__ = ()
+
+    def __init__(
+        self,
+        ast: ASTNode,
+        sort: SeqSortRef,
+        vars: frozenset[tuple[str, ASTSort]] = frozenset(),
+    ) -> None:
+        super().__init__(ast, sort, vars)
+
+    def __add__(self, other: SeqRef) -> SeqRef:
+        if not isinstance(other, SeqRef):
+            return NotImplemented
+        return SeqRef(
+            SeqConcatNode(self._ast, other._ast),
+            self._sort,  # type: ignore[arg-type]
+            _merge(self._vars, other._vars),
+        )
+
+    def __getitem__(self, idx: ArithRef | int) -> ExprRef:
+        if isinstance(idx, int):
+            idx = IntVal(idx)
+        sort = self._sort
+        elem_sort = sort._elem if isinstance(sort, SeqSortRef) else IntSort()
+        return ExprRef(
+            SeqNthNode(self._ast, idx._ast),
+            elem_sort,
+            _merge(self._vars, idx._vars),
+        )
+
+    def at(self, idx: ArithRef | int) -> SeqRef:
+        """Return a unit sequence at the given index."""
+        elem = self[idx]
+        return Unit(elem)
+
+    def is_string(self) -> bool:
+        sort = self._sort
+        return isinstance(sort, SeqSortRef) and sort.is_string()
+
+
+def SeqSort(s: SortRef) -> SeqSortRef | StringSortRef:
     """General sequence sort. For Char, returns StringSort."""
-    if isinstance(s, _CharSortRef):
+    if isinstance(s, CharSortRef):
         return StringSort()
-    return SortRef(UninterpASTSort(f"Seq_{s.name()}"))
+    return SeqSortRef(s)
 
 
 def Empty(s: SortRef) -> ExprRef:
@@ -3847,6 +4011,8 @@ def Empty(s: SortRef) -> ExprRef:
         return StringVal("")
     if isinstance(s, ArraySortRef):
         return EmptySet(s.domain())
+    if isinstance(s, SeqSortRef):
+        return SeqRef(SeqEmptyNode(s._elem._ast_sort), s)
     return StringVal("")
 
 
@@ -3861,7 +4027,9 @@ def Unit(e: ExprRef) -> ExprRef:
     """Single-element sequence."""
     if isinstance(e, StringRef):
         return e
-    return ExprRef(AppNode(_AstVar("seq.unit"), (e._ast,)), e._sort, e._vars)
+    if isinstance(e, CharRef):
+        return e
+    return SeqRef(SeqUnitNode(e._ast), SeqSortRef(e._sort), e._vars)
 
 
 def SubSeq(s: StringRef, lo: ArithRef | int, length: ArithRef | int) -> StringRef:
@@ -4690,6 +4858,10 @@ __all__ = [
     "ArraySortRef",
     "StringSortRef",
     "ReSort",
+    "CharSortRef",
+    "CharRef",
+    "SeqSortRef",
+    "SeqRef",
     "BoolSort",
     "IntSort",
     "NatSort",

@@ -156,6 +156,35 @@ from lean_py.z3 import (
     RNE,
     RealVal,
     Reals,
+    BVAddNoOverflow,
+    BVMulNoOverflow,
+    fpIsPositive,
+    fpIsNegative,
+    CharSort,
+    CharSortRef,
+    CharVal,
+    CharRef,
+    CharFromBv,
+    CharToBv,
+    CharToInt,
+    CharIsDigit,
+    SeqSort,
+    SeqSortRef,
+    SeqRef,
+    Empty,
+    Unit,
+    SetSort,
+    EmptySet,
+    FullSet,
+    SetAdd,
+    SetDel,
+    IsMember,
+    SetUnion,
+    SetIntersect,
+    SetComplement,
+    SetDifference,
+    IsSubset,
+    ArrayRef,
 )
 from lean_py.z3._ast import (
     BinOp,
@@ -1778,3 +1807,309 @@ class TestMixedSortProofs:
         """ToReal(3) == ToReal(3)."""
         claim = ToReal(IntVal(3)) == ToReal(IntVal(3))
         assert _try_prove(claim)
+
+
+# ------------------------------------------------------------------
+# Bug fix tests
+# ------------------------------------------------------------------
+
+
+class TestBugFixes:
+    """Tests for specific bug fixes."""
+
+    def test_inttostr_negative(self, kernel):
+        """IntToStr(-5) should return empty string per SMT-LIB spec."""
+        claim = IntToStr(IntVal(-5)) == StringVal("")
+        assert _try_prove(claim)
+
+    def test_bv_add_no_overflow_unsigned(self, kernel):
+        """BVAddNoOverflow unsigned: 200 + 100 overflows 8-bit."""
+        from lean_py.z3 import BVAddNoOverflow
+
+        a = BitVecVal(200, 8)
+        b = BitVecVal(100, 8)
+        # 200 + 100 = 300 > 255, so no-overflow should be False
+        overflow_check = Not(BVAddNoOverflow(a, b, signed=False))
+        assert _try_prove(overflow_check)
+
+    def test_bv_mul_no_overflow_unsigned(self, kernel):
+        """BVMulNoOverflow unsigned: 200 * 2 overflows 8-bit."""
+        from lean_py.z3 import BVMulNoOverflow
+
+        a = BitVecVal(200, 8)
+        b = BitVecVal(2, 8)
+        # 200 * 2 = 400 > 255, so no-overflow should be False
+        overflow_check = Not(BVMulNoOverflow(a, b, signed=False))
+        assert _try_prove(overflow_check)
+
+    def test_fp_is_positive_zero(self, kernel):
+        """fpIsPositive(+0.0) should be True."""
+        from lean_py.z3 import fpIsPositive
+
+        claim = fpIsPositive(FPVal(0.0, Float64()))
+        assert _try_prove(claim)
+
+    def test_fp_is_negative_neg_zero(self, kernel):
+        """fpIsNegative(-0.0) should be True."""
+        from lean_py.z3 import fpIsNegative
+
+        claim = fpIsNegative(FPVal(-0.0, Float64()))
+        assert _try_prove(claim)
+
+
+# ------------------------------------------------------------------
+# Char tests
+# ------------------------------------------------------------------
+
+
+class TestChar:
+    """Tests for Char sort and operations."""
+
+    def test_char_sort_creation(self):
+        """CharSort() creates the char sort."""
+        from lean_py.z3 import CharSort, CharSortRef
+
+        s = CharSort()
+        assert isinstance(s, CharSortRef)
+
+    def test_char_val_from_str(self):
+        """CharVal creates a char literal from string."""
+        from lean_py.z3 import CharVal, CharRef
+
+        c = CharVal("A")
+        assert isinstance(c, CharRef)
+
+    def test_char_val_from_int(self):
+        """CharVal creates a char literal from int."""
+        from lean_py.z3 import CharVal, CharRef
+
+        c = CharVal(65)
+        assert isinstance(c, CharRef)
+
+    def test_char_to_int(self):
+        """CharToInt returns ArithRef."""
+        from lean_py.z3 import CharVal, CharToInt
+
+        from lean_py.z3.core import ArithRef
+
+        c = CharVal("A")
+        i = CharToInt(c)
+        assert isinstance(i, ArithRef)
+
+    def test_char_to_bv(self):
+        """CharToBv returns BitVecRef."""
+        from lean_py.z3 import CharVal, CharToBv
+
+        c = CharVal("A")
+        bv = CharToBv(c)
+        assert isinstance(bv, BitVecRef)
+
+    def test_char_is_digit(self):
+        """CharIsDigit returns BoolRef."""
+        from lean_py.z3 import CharVal, CharIsDigit
+        from lean_py.z3.core import BoolRef
+
+        c = CharVal("5")
+        d = CharIsDigit(c)
+        assert isinstance(d, BoolRef)
+
+    def test_char_to_int_semantic(self, kernel):
+        """CharToInt(CharVal('A')) == 65."""
+        from lean_py.z3 import CharVal, CharToInt
+
+        claim = CharToInt(CharVal("A")) == IntVal(65)
+        assert _try_prove(claim)
+
+    def test_char_const(self):
+        """Const with CharSort creates CharRef."""
+        from lean_py.z3 import CharSort, CharRef
+
+        c = Const("c", CharSort())
+        assert isinstance(c, CharRef)
+
+
+# ------------------------------------------------------------------
+# Set tests
+# ------------------------------------------------------------------
+
+
+class TestSets:
+    """Tests for Set sort and operations."""
+
+    def test_set_sort_creation(self):
+        """SetSort creates ArraySortRef."""
+        from lean_py.z3 import SetSort, ArraySortRef
+
+        s = SetSort(IntSort())
+        assert isinstance(s, ArraySortRef)
+
+    def test_empty_set(self):
+        """EmptySet creates an array expression."""
+        from lean_py.z3 import EmptySet, ArrayRef
+
+        s = EmptySet(IntSort())
+        assert isinstance(s, ArrayRef)
+
+    def test_full_set(self):
+        """FullSet creates an array expression."""
+        from lean_py.z3 import FullSet, ArrayRef
+
+        s = FullSet(IntSort())
+        assert isinstance(s, ArrayRef)
+
+    def test_set_add(self):
+        """SetAdd adds element to set."""
+        from lean_py.z3 import SetAdd, EmptySet, ArrayRef
+
+        s = SetAdd(EmptySet(IntSort()), IntVal(1))
+        assert isinstance(s, ArrayRef)
+
+    def test_is_member(self):
+        """IsMember tests membership."""
+        from lean_py.z3 import IsMember, SetAdd, EmptySet, BoolRef
+
+        s = SetAdd(EmptySet(IntSort()), IntVal(1))
+        m = IsMember(IntVal(1), s)
+        assert isinstance(m, BoolRef)
+
+    def test_is_member_semantic(self, kernel):
+        """IsMember(1, SetAdd(EmptySet, 1)) is provable."""
+        from lean_py.z3 import IsMember, SetAdd, EmptySet
+
+        claim = IsMember(IntVal(1), SetAdd(EmptySet(IntSort()), IntVal(1)))
+        assert _try_prove(claim)
+
+    def test_set_union(self):
+        """SetUnion creates an array expression."""
+        from lean_py.z3 import SetUnion, EmptySet, SetAdd, ArrayRef
+
+        a = SetAdd(EmptySet(IntSort()), IntVal(1))
+        b = SetAdd(EmptySet(IntSort()), IntVal(2))
+        u = SetUnion(a, b)
+        assert isinstance(u, ExprRef)
+
+    def test_set_intersect(self):
+        """SetIntersect creates an array expression."""
+        from lean_py.z3 import SetIntersect, EmptySet, SetAdd
+
+        a = SetAdd(EmptySet(IntSort()), IntVal(1))
+        b = SetAdd(EmptySet(IntSort()), IntVal(1))
+        i = SetIntersect(a, b)
+        assert isinstance(i, ExprRef)
+
+    def test_set_complement(self):
+        """SetComplement creates an array expression."""
+        from lean_py.z3 import SetComplement, EmptySet
+
+        s = SetComplement(EmptySet(IntSort()))
+        assert isinstance(s, ExprRef)
+
+    def test_set_difference(self):
+        """SetDifference creates an array expression."""
+        from lean_py.z3 import SetDifference, EmptySet, SetAdd
+
+        a = SetAdd(EmptySet(IntSort()), IntVal(1))
+        b = EmptySet(IntSort())
+        d = SetDifference(a, b)
+        assert isinstance(d, ExprRef)
+
+    def test_is_subset(self):
+        """IsSubset creates a BoolRef."""
+        from lean_py.z3 import IsSubset, EmptySet, SetAdd, BoolRef
+
+        a = EmptySet(IntSort())
+        b = SetAdd(EmptySet(IntSort()), IntVal(1))
+        s = IsSubset(a, b)
+        assert isinstance(s, BoolRef)
+
+
+# ------------------------------------------------------------------
+# Sequence tests
+# ------------------------------------------------------------------
+
+
+class TestSequences:
+    """Tests for Sequence sort and operations."""
+
+    def test_seq_sort_creation(self):
+        """SeqSort creates a SeqSortRef."""
+        from lean_py.z3 import SeqSort, SeqSortRef
+
+        s = SeqSort(IntSort())
+        assert isinstance(s, SeqSortRef)
+
+    def test_seq_sort_char_is_string(self):
+        """SeqSort(CharSort()) returns StringSort."""
+        from lean_py.z3 import SeqSort, CharSort
+
+        s = SeqSort(CharSort())
+        assert isinstance(s, StringSortRef)
+
+    def test_empty_seq(self):
+        """Empty(SeqSort) creates a SeqRef."""
+        from lean_py.z3 import SeqSort, SeqRef, Empty
+
+        s = SeqSort(IntSort())
+        e = Empty(s)
+        assert isinstance(e, SeqRef)
+
+    def test_unit_seq(self):
+        """Unit creates a SeqRef from a non-string element."""
+        from lean_py.z3 import Unit, SeqRef
+
+        u = Unit(IntVal(42))
+        assert isinstance(u, SeqRef)
+
+    def test_seq_concat(self):
+        """Sequence concatenation via + operator."""
+        from lean_py.z3 import SeqSort, SeqRef, Empty, Unit
+
+        s1 = Unit(IntVal(1))
+        s2 = Unit(IntVal(2))
+        assert isinstance(s1, SeqRef)
+        assert isinstance(s2, SeqRef)
+        s3 = s1 + s2
+        assert isinstance(s3, SeqRef)
+
+    def test_seq_length(self):
+        """Length works on SeqRef."""
+        from lean_py.z3 import Unit, SeqRef
+        from lean_py.z3.core import ArithRef
+
+        s = Unit(IntVal(42))
+        l = Length(s)
+        assert isinstance(l, ArithRef)
+
+    def test_seq_contains(self):
+        """Contains works on SeqRef."""
+        from lean_py.z3 import Unit, SeqRef, BoolRef
+
+        s = Unit(IntVal(1))
+        t = Unit(IntVal(1))
+        c = Contains(s, t)
+        assert isinstance(c, BoolRef)
+
+    def test_seq_prefix_of(self):
+        """PrefixOf works on SeqRef."""
+        from lean_py.z3 import Unit, SeqRef, BoolRef
+
+        s = Unit(IntVal(1))
+        t = Unit(IntVal(1))
+        p = PrefixOf(s, t)
+        assert isinstance(p, BoolRef)
+
+    def test_seq_suffix_of(self):
+        """SuffixOf works on SeqRef."""
+        from lean_py.z3 import Unit, SeqRef, BoolRef
+
+        s = Unit(IntVal(1))
+        t = Unit(IntVal(1))
+        su = SuffixOf(s, t)
+        assert isinstance(su, BoolRef)
+
+    def test_seq_const(self):
+        """Const with SeqSort creates SeqRef."""
+        from lean_py.z3 import SeqSort, SeqRef
+
+        s = Const("s", SeqSort(IntSort()))
+        assert isinstance(s, SeqRef)
