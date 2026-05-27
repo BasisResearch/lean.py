@@ -3865,10 +3865,6 @@ class CharSortRef(SortRef):
     pass
 
 
-# Keep old name as alias
-_CharSortRef = CharSortRef
-
-
 class CharRef(ExprRef):
     """Character expression."""
 
