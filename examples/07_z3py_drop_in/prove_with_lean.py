@@ -20,12 +20,14 @@ from pathlib import Path
 
 # -- kernel setup -----------------------------------------------------------
 
+
 def setup_kernel(managed: bool = False):
     from lean_py.z3 import set_kernel
 
     if managed:
         from lean_py.project import ManagedProject
         from lean_py.utils import add_lean_lib_to_dyld_path
+
         add_lean_lib_to_dyld_path()
         mp = ManagedProject.get()
         k = mp.kernel()
@@ -36,6 +38,7 @@ def setup_kernel(managed: bool = False):
     from lean_py import LeanLibrary
     from lean_py.kernel import Kernel
     from lean_py.utils import add_lean_lib_to_dyld_path
+
     add_lean_lib_to_dyld_path()
 
     # Point at tests/lean as a convenient pre-built fixture
@@ -130,11 +133,12 @@ def quantifiers_and_uninterpreted():
     socrates = Const("socrates", Entity)
     x = Const("x", Entity)
 
-    prove(Implies(
-        And(ForAll([x], Implies(Man(x), Mortal(x))),
-            Man(socrates)),
-        Mortal(socrates),
-    ))
+    prove(
+        Implies(
+            And(ForAll([x], Implies(Man(x), Mortal(x))), Man(socrates)),
+            Mortal(socrates),
+        )
+    )
 
     # Function congruence: f(x) = f(y) if x = y
     S = DeclareSort("S")

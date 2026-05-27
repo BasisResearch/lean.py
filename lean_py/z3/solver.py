@@ -23,22 +23,33 @@ from typing import Any
 from lean_py.kernel import Kernel
 from lean_py.project import ManagedProject
 from lean_py.z3._ast import (
-    ASTNode,
-    ASTSort,
     AppNode,
     ArrowASTSort,
-    BitvecASTSort,
+    ASTNode,
+    ASTSort,
     BinOpNode,
+    BitvecASTSort,
     BoolLit,
     BvLit,
+    CharASTSort,
+    CharFromBvNode,
+    CharIsDigitNode,
+    CharLit,
+    CharToNatNode,
     ConstArrayNode,
     DistinctNode,
     ExistsNode,
     ExtractNode,
+    FinDomainASTSort,
+    FinDomainLit,
     ForAllNode,
     FpASTSort,
     FpLitNode,
     FpOpNode,
+    InductiveAccessorNode,
+    InductiveASTSort,
+    InductiveCtorNode,
+    InductiveRecognizerNode,
     InReNode,
     Int2BvNode,
     IntASTSort,
@@ -50,8 +61,8 @@ from lean_py.z3._ast import (
     NatLit,
     PropSort,
     RealASTSort,
-    ReConcatNode,
     ReComplementNode,
+    ReConcatNode,
     ReIntersectNode,
     ReLoopNode,
     ReOptionNode,
@@ -60,46 +71,35 @@ from lean_py.z3._ast import (
     ReStarNode,
     ReUnionNode,
     SelectNode,
+    SeqASTSort,
+    SeqConcatNode,
+    SeqContainsNode,
+    SeqEmptyNode,
+    SeqLenNode,
+    SeqNthNode,
+    SeqPrefixOfNode,
+    SeqSuffixOfNode,
+    SeqUnitNode,
     SignExtNode,
     StoreNode,
     StrConcatNode,
     StrContainsNode,
     StrIndexOfNode,
+    StringASTSort,
+    StringLit,
     StrLenNode,
     StrPrefixOfNode,
     StrReplaceNode,
     StrSubstrNode,
     StrSuffixOfNode,
     StrToIntNode,
-    StringASTSort,
-    StringLit,
     ToIntNode,
     ToRealNode,
-    UnOpNode,
     TypeASTSort,
     UninterpASTSort,
+    UnOpNode,
     Var,
     ZeroExtNode,
-    FinDomainASTSort,
-    FinDomainLit,
-    InductiveASTSort,
-    InductiveCtorNode,
-    InductiveAccessorNode,
-    InductiveRecognizerNode,
-    CharASTSort,
-    CharLit,
-    CharToNatNode,
-    CharFromBvNode,
-    CharIsDigitNode,
-    SeqASTSort,
-    SeqEmptyNode,
-    SeqUnitNode,
-    SeqLenNode,
-    SeqConcatNode,
-    SeqContainsNode,
-    SeqPrefixOfNode,
-    SeqSuffixOfNode,
-    SeqNthNode,
 )
 from lean_py.z3.core import (
     And,
@@ -136,9 +136,7 @@ class CheckSatResult:
         return hash(self._name)
 
     def __bool__(self) -> bool:
-        raise TypeError(
-            "CheckSatResult cannot be used as bool; compare to sat/unsat/unknown"
-        )
+        raise TypeError("CheckSatResult cannot be used as bool; compare to sat/unsat/unknown")
 
 
 sat = CheckSatResult("sat")
@@ -662,9 +660,7 @@ class Solver:
     @staticmethod
     def from_file(filename: str) -> Solver:
         """Load solver from file (not supported)."""
-        raise NotImplementedError(
-            "from_file not supported: Lean uses its own syntax, not SMT-LIB2"
-        )
+        raise NotImplementedError("from_file not supported: Lean uses its own syntax, not SMT-LIB2")
 
     @staticmethod
     def from_string(s: str) -> Solver:
@@ -781,9 +777,7 @@ def solve_using(s: Solver, *args: BoolRef) -> CheckSatResult:
     return s.check()
 
 
-def parse_smt2_string(
-    s: str, sorts: dict | None = None, decls: dict | None = None
-) -> list:
+def parse_smt2_string(s: str, sorts: dict | None = None, decls: dict | None = None) -> list:
     """Parse a string in SMT-LIB2 format using the given sorts and decls.
 
     Returns a list of assertions (z3py ``ExprRef`` objects).
@@ -791,9 +785,7 @@ def parse_smt2_string(
     return _parse_smt2_string_impl(s, sorts=sorts, decls=decls)
 
 
-def parse_smt2_file(
-    filename: str, sorts: dict | None = None, decls: dict | None = None
-) -> list:
+def parse_smt2_file(filename: str, sorts: dict | None = None, decls: dict | None = None) -> list:
     """Parse an SMT-LIB2 file using the given sorts and decls.
 
     Returns a list of assertions (z3py ``ExprRef`` objects).
@@ -905,9 +897,7 @@ class Fixedpoint:
         """Wrap *expr* in ForAll over declared vars that appear in it."""
         var_names = {name for name, _ in expr._vars}
         used = [
-            v
-            for v in self._declared_vars
-            if isinstance(v._ast, Var) and v._ast.name in var_names
+            v for v in self._declared_vars if isinstance(v._ast, Var) and v._ast.name in var_names
         ]
         if used:
             return ForAll(used, expr)
@@ -951,9 +941,7 @@ class Fixedpoint:
         # Build: (premise₁ ∧ … ∧ premiseₙ) → query
         goal: BoolRef
         if self._premises:
-            conj = (
-                And(*self._premises) if len(self._premises) > 1 else self._premises[0]
-            )
+            conj = And(*self._premises) if len(self._premises) > 1 else self._premises[0]
             goal = Implies(conj, q)
         else:
             goal = q
@@ -1097,16 +1085,12 @@ def is_as_array(a: Any) -> bool:
 
 def get_as_array_func(a: Any) -> Any:
     """Get FuncDeclRef from as-array expression."""
-    raise NotImplementedError(
-        "get_as_array_func not supported: Lean cannot produce counter-models"
-    )
+    raise NotImplementedError("get_as_array_func not supported: Lean cannot produce counter-models")
 
 
 def get_map_func(a: Any) -> Any:
     """Get FuncDeclRef from mapped array expression."""
-    raise NotImplementedError(
-        "get_map_func not supported: Lean cannot produce counter-models"
-    )
+    raise NotImplementedError("get_map_func not supported: Lean cannot produce counter-models")
 
 
 # ---------------------------------------------------------------------------
@@ -1123,19 +1107,13 @@ class OptimizeObjective:
         self._idx = idx
 
     def lower(self) -> Any:
-        raise NotImplementedError(
-            "OptimizeObjective.lower not supported: Lean is a proof checker"
-        )
+        raise NotImplementedError("OptimizeObjective.lower not supported: Lean is a proof checker")
 
     def upper(self) -> Any:
-        raise NotImplementedError(
-            "OptimizeObjective.upper not supported: Lean is a proof checker"
-        )
+        raise NotImplementedError("OptimizeObjective.upper not supported: Lean is a proof checker")
 
     def value(self) -> Any:
-        raise NotImplementedError(
-            "OptimizeObjective.value not supported: Lean is a proof checker"
-        )
+        raise NotImplementedError("OptimizeObjective.value not supported: Lean is a proof checker")
 
     def __repr__(self) -> str:
         kind = "maximize" if self._is_max else "minimize"

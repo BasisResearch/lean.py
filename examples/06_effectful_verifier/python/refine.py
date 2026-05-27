@@ -14,32 +14,36 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import Annotated, get_type_hints
+from typing import get_type_hints
 
 from effectful.ops.semantics import evaluate, handler
 from effectful.ops.syntax import defdata, defop
 from effectful.ops.types import Operation
-
 from expr_builder import ExprBuilder
-from lean_py.kernel import GoalState
 
+from lean_py.kernel import GoalState
 
 # ---------------------------------------------------------------------------
 #  Refinement annotations
 # ---------------------------------------------------------------------------
 
+
 class Gt:
     """Refinement: value > n."""
+
     def __init__(self, n: int):
         self.n = n
+
     def __repr__(self):
         return f"Gt({self.n})"
 
 
 class Ge:
     """Refinement: value >= n."""
+
     def __init__(self, n: int):
         self.n = n
+
     def __repr__(self):
         return f"Ge({self.n})"
 
@@ -47,6 +51,7 @@ class Ge:
 # ---------------------------------------------------------------------------
 #  assert_refined — effectful operation (intercepted by handler)
 # ---------------------------------------------------------------------------
+
 
 @defop
 def assert_refined(value: int, refinement) -> None:
@@ -62,6 +67,7 @@ def assert_refined(value: int, refinement) -> None:
 #  Verification result
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class VerificationResult:
     description: str
@@ -74,6 +80,7 @@ class VerificationResult:
 # ---------------------------------------------------------------------------
 #  Term → human-readable Lean syntax string (for display)
 # ---------------------------------------------------------------------------
+
 
 def _build_lean_str(vc_term, var_names, var_ops, precond_terms) -> str:
     """Convert an effectful Term to a Lean proposition string."""
@@ -92,10 +99,10 @@ def _build_lean_str(vc_term, var_names, var_ops, precond_terms) -> str:
     str_handler[int_ops.__add__] = lambda a, b: f"({_wrap(a)} + {_wrap(b)})"
     str_handler[int_ops.__sub__] = lambda a, b: f"({_wrap(a)} - {_wrap(b)})"
     str_handler[int_ops.__mul__] = lambda a, b: f"({_wrap(a)} * {_wrap(b)})"
-    str_handler[int_ops.__gt__]  = lambda a, b: f"({_wrap(a)} > {_wrap(b)})"
-    str_handler[int_ops.__ge__]  = lambda a, b: f"({_wrap(a)} >= {_wrap(b)})"
-    str_handler[int_ops.__lt__]  = lambda a, b: f"({_wrap(a)} < {_wrap(b)})"
-    str_handler[int_ops.__le__]  = lambda a, b: f"({_wrap(a)} <= {_wrap(b)})"
+    str_handler[int_ops.__gt__] = lambda a, b: f"({_wrap(a)} > {_wrap(b)})"
+    str_handler[int_ops.__ge__] = lambda a, b: f"({_wrap(a)} >= {_wrap(b)})"
+    str_handler[int_ops.__lt__] = lambda a, b: f"({_wrap(a)} < {_wrap(b)})"
+    str_handler[int_ops.__le__] = lambda a, b: f"({_wrap(a)} <= {_wrap(b)})"
 
     with handler(str_handler):
         body_str = evaluate(vc_term)
@@ -111,6 +118,7 @@ def _build_lean_str(vc_term, var_names, var_ops, precond_terms) -> str:
 # ---------------------------------------------------------------------------
 #  Term → Lean.Expr (for formal verification)
 # ---------------------------------------------------------------------------
+
 
 def _make_expr_handler(eb: ExprBuilder, var_names, var_ops, depth):
     """Build an effectful handler that maps Term ops → Lean.Expr builders.
@@ -131,10 +139,10 @@ def _make_expr_handler(eb: ExprBuilder, var_names, var_ops, depth):
     h[int_ops.__add__] = lambda a, b: eb.mk_int_add(coerce(a), coerce(b))
     h[int_ops.__sub__] = lambda a, b: eb.mk_int_sub(coerce(a), coerce(b))
     h[int_ops.__mul__] = lambda a, b: eb.mk_int_mul(coerce(a), coerce(b))
-    h[int_ops.__gt__]  = lambda a, b: eb.mk_int_gt(coerce(a), coerce(b))
-    h[int_ops.__ge__]  = lambda a, b: eb.mk_int_ge(coerce(a), coerce(b))
-    h[int_ops.__lt__]  = lambda a, b: eb.mk_int_lt(coerce(a), coerce(b))
-    h[int_ops.__le__]  = lambda a, b: eb.mk_int_le(coerce(a), coerce(b))
+    h[int_ops.__gt__] = lambda a, b: eb.mk_int_gt(coerce(a), coerce(b))
+    h[int_ops.__ge__] = lambda a, b: eb.mk_int_ge(coerce(a), coerce(b))
+    h[int_ops.__lt__] = lambda a, b: eb.mk_int_lt(coerce(a), coerce(b))
+    h[int_ops.__le__] = lambda a, b: eb.mk_int_le(coerce(a), coerce(b))
     return h
 
 
@@ -170,6 +178,7 @@ def _build_vc_expr(eb: ExprBuilder, vc_term, var_names, var_ops, precond_terms):
 # ---------------------------------------------------------------------------
 #  Core: verify_function
 # ---------------------------------------------------------------------------
+
 
 def verify_function(fn, lib, kernel) -> list[VerificationResult]:
     """Verify all ``assert_refined`` calls in *fn* hold given its refinements.
@@ -228,6 +237,7 @@ def verify_function(fn, lib, kernel) -> list[VerificationResult]:
 # ---------------------------------------------------------------------------
 #  Lean verification via goalFromExpr
 # ---------------------------------------------------------------------------
+
 
 def _verify_expr(lib, kernel, lean_expr) -> bool:
     """Create a goal from a ``Lean.Expr`` and close it.

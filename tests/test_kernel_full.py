@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-
 # --- shared fixture ---------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def kernel(example_lib):
@@ -21,6 +21,7 @@ def kernel(example_lib):
 
 
 # --- environment introspection ----------------------------------------------
+
 
 def test_env_loaded(kernel):
     assert kernel.leanpy_kernel_is_loaded(None) is True
@@ -74,6 +75,7 @@ def test_env_is_internal(kernel):
 
 # --- elaboration -----------------------------------------------------------
 
+
 def test_infer_type_basic(kernel):
     assert "Nat" in kernel.leanpy_kernel_infer_type("Nat.succ Nat.zero")
     assert "Bool" in kernel.leanpy_kernel_infer_type("true")
@@ -114,6 +116,7 @@ def test_decide_false(kernel):
 
 # --- goal state ------------------------------------------------------------
 
+
 def test_goal_create(kernel):
     """We can create a goal state and read off its solved/unsolved flag."""
     state = kernel.leanpy_kernel_goal_create("∀ n : Nat, n + 0 = n")
@@ -125,6 +128,7 @@ def test_goal_create(kernel):
 def test_goal_create_invalid(kernel):
     """Invalid types raise `LeanError`."""
     from lean_py import LeanError
+
     with pytest.raises(LeanError):
         kernel.leanpy_kernel_goal_create("@@@@")
 

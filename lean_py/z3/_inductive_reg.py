@@ -25,9 +25,7 @@ def _collect_uninterp_sorts(ast_sort: Any) -> set[str]:
     if isinstance(ast_sort, UninterpASTSort):
         return {ast_sort.name}
     if isinstance(ast_sort, ArrowASTSort):
-        return _collect_uninterp_sorts(ast_sort.dom) | _collect_uninterp_sorts(
-            ast_sort.cod
-        )
+        return _collect_uninterp_sorts(ast_sort.dom) | _collect_uninterp_sorts(ast_sort.cod)
     if isinstance(ast_sort, SeqASTSort):
         return _collect_uninterp_sorts(ast_sort.elem)
     return set()

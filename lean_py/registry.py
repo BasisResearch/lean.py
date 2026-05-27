@@ -35,14 +35,14 @@ class TypeRepr:
     kind: str
     # Optional fields, depending on kind
     bits: int | None = None
-    elem: "TypeRepr | None" = None
-    a: "TypeRepr | None" = None
-    b: "TypeRepr | None" = None
-    e: "TypeRepr | None" = None
+    elem: TypeRepr | None = None
+    a: TypeRepr | None = None
+    b: TypeRepr | None = None
+    e: TypeRepr | None = None
     name: str | None = None
 
     @classmethod
-    def from_json(cls, data: dict[str, Any]) -> "TypeRepr":
+    def from_json(cls, data: dict[str, Any]) -> TypeRepr:
         kind = data["kind"]
         kw: dict[str, Any] = {"kind": kind}
         if "bits" in data:
@@ -111,7 +111,7 @@ class CtorInfo:
     fields: tuple[TypeRepr, ...]
 
     @classmethod
-    def from_json(cls, data: dict[str, Any]) -> "CtorInfo":
+    def from_json(cls, data: dict[str, Any]) -> CtorInfo:
         return cls(
             name=data["name"],
             tag=int(data["tag"]),
@@ -136,7 +136,7 @@ class TypeInfo:
     ctors: tuple[CtorInfo, ...]
 
     @classmethod
-    def from_json(cls, data: dict[str, Any]) -> "TypeInfo":
+    def from_json(cls, data: dict[str, Any]) -> TypeInfo:
         return cls(
             name=data["name"],
             isStructure=bool(data.get("isStructure", False)),
@@ -162,7 +162,7 @@ class FuncInfo:
     returnType: TypeRepr
 
     @classmethod
-    def from_json(cls, data: dict[str, Any]) -> "FuncInfo":
+    def from_json(cls, data: dict[str, Any]) -> FuncInfo:
         return cls(
             declName=data["declName"],
             exportName=data["exportName"],
@@ -186,7 +186,7 @@ class LibraryRegistry:
     types: tuple[TypeInfo, ...] = field(default_factory=tuple)
 
     @classmethod
-    def from_json_strings(cls, funcs_json: str, types_json: str) -> "LibraryRegistry":
+    def from_json_strings(cls, funcs_json: str, types_json: str) -> LibraryRegistry:
         farr = json.loads(funcs_json) if funcs_json else []
         tarr = json.loads(types_json) if types_json else []
         # Dedupe types by name. `derive_python` for recursive inductives

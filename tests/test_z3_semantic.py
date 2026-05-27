@@ -8,54 +8,123 @@ AST construction. Tests are organized by theory/sort.
 from __future__ import annotations
 
 from pathlib import Path
+
 import pytest
 
 from lean_py.kernel import Kernel
 from lean_py.z3 import (
-    And, Or, Not, Implies, Xor, If, Distinct,
-    Bool, BoolVal, BoolSort,
-    Int, IntVal, IntSort, Ints,
-    Nat, NatVal, NatSort,
-    Real, RealVal, RealSort, Reals, ToReal, ToInt,
-    Q, RatVal,
-    BitVec, BitVecVal, BitVecSort, BitVecs,
-    Concat, Extract, ZeroExt, SignExt,
-    RotateLeft, RotateRight, LShR, AShr,
-    BV2Int, Int2BV, ULT, ULE, UGT, UGE,
-    SDiv, SRem, UDiv, URem,
-    Array, ArraySort, Select, Store, K,
-    String, StringVal, StringSort, Strings,
-    Length, Contains, PrefixOf, SuffixOf,
-    Replace, SubString, IndexOf, StrConcat,
-    StrToInt, IntToStr,
-    Re, Star, Plus, Option, Union, Intersect,
-    Range, Loop, InRe,
-    Float64, FPVal, FPSort, FPNumRef, FPRef,
-    fpAdd, fpSub, fpMul, fpDiv, fpNeg, fpAbs,
-    fpMin, fpMax, fpLT, fpLEQ, fpGT, fpGEQ, fpEQ,
-    fpIsNaN, fpIsZero, fpIsInf,
-    fpNaN, fpPlusInfinity, fpMinusInfinity,
-    fpPlusZero, fpMinusZero,
     RNE,
-    ForAll, Exists, Lambda,
-    Function, DeclareSort, Const,
-    Solver, sat, unsat, unknown,
-    Sum, Product, Abs,
+    UGT,
+    ULE,
+    ULT,
+    Abs,
+    And,
+    Array,
+    AShr,
+    BitVec,
+    BitVecs,
+    BitVecVal,
+    Bool,
+    BoolSort,
+    BoolVal,
+    BV2Int,
+    Concat,
+    Const,
+    Contains,
+    DeclareSort,
+    Distinct,
+    Exists,
+    Extract,
+    Float64,
+    ForAll,
+    FPVal,
+    Function,
+    If,
+    Implies,
+    IndexOf,
+    Int,
+    Int2BV,
+    Ints,
+    IntSort,
+    IntToStr,
+    IntVal,
+    K,
+    Lambda,
+    Length,
+    LShR,
+    Nat,
+    NatVal,
+    Not,
+    Or,
+    PrefixOf,
+    Product,
+    Q,
+    Reals,
+    RealVal,
+    Replace,
+    RotateLeft,
+    RotateRight,
+    SDiv,
+    Select,
+    SignExt,
+    Solver,
+    SRem,
+    Store,
+    StrConcat,
+    String,
+    Strings,
+    StringVal,
+    StrToInt,
+    SubString,
+    SuffixOf,
+    Sum,
+    ToReal,
+    UDiv,
+    URem,
+    Xor,
+    ZeroExt,
+    fpAbs,
+    fpAdd,
+    fpDiv,
+    fpEQ,
+    fpGEQ,
+    fpGT,
+    fpIsInf,
+    fpIsNaN,
+    fpIsZero,
+    fpLEQ,
+    fpLT,
+    fpMax,
+    fpMin,
+    fpMinusInfinity,
+    fpMinusZero,
+    fpMul,
+    fpNaN,
+    fpNeg,
+    fpPlusInfinity,
+    fpPlusZero,
+    fpSub,
+    sat,
     set_kernel,
-    Complement,
+    unsat,
 )
 from lean_py.z3.solver import _try_prove
-from lean_py.z3.tactic import Tactic, Goal
+from lean_py.z3.tactic import Goal, Tactic
 
 
 @pytest.fixture(scope="module")
 def kernel(example_lib) -> Kernel:
     k = Kernel(example_lib)
     import subprocess
-    sp = subprocess.check_output(
-        ["lake", "env", "printenv", "LEAN_PATH"],
-        cwd=str(Path(__file__).parent / "lean"),
-    ).decode().strip()
+
+    sp = (
+        subprocess.check_output(
+            ["lake", "env", "printenv", "LEAN_PATH"],
+            cwd=str(Path(__file__).parent / "lean"),
+        )
+        .decode()
+        .strip()
+    )
     k.init_search(sp)
     k.load(["Init", "LeanPy.Z3"])
     set_kernel(k)
@@ -65,6 +134,7 @@ def kernel(example_lib) -> Kernel:
 # ===================================================================
 # SECTION 1: BOOLEAN LOGIC — Truth tables, laws, tautologies
 # ===================================================================
+
 
 class TestBoolTruthTables:
     """Exhaustive truth-table verification for basic connectives."""
@@ -220,6 +290,7 @@ class TestBoolLaws:
 # SECTION 2: INTEGER ARITHMETIC
 # ===================================================================
 
+
 class TestIntArithmeticGround:
     """Ground integer arithmetic proofs (concrete values)."""
 
@@ -356,6 +427,7 @@ class TestIntComparisons:
 # SECTION 3: RATIONAL (REAL) ARITHMETIC
 # ===================================================================
 
+
 class TestRationalGround:
     """Ground rational arithmetic proofs."""
 
@@ -420,6 +492,7 @@ class TestRationalUniversal:
 # SECTION 4: BIT-VECTOR OPERATIONS
 # ===================================================================
 
+
 class TestBVGroundArith:
     """Ground bit-vector arithmetic proofs."""
 
@@ -459,13 +532,19 @@ class TestBVBitwise:
     """Ground bitwise operation proofs."""
 
     def test_and(self, kernel):
-        assert _try_prove(BitVecVal(0b11001100, 8) & BitVecVal(0b10101010, 8) == BitVecVal(0b10001000, 8))
+        assert _try_prove(
+            BitVecVal(0b11001100, 8) & BitVecVal(0b10101010, 8) == BitVecVal(0b10001000, 8)
+        )
 
     def test_or(self, kernel):
-        assert _try_prove(BitVecVal(0b11001100, 8) | BitVecVal(0b10101010, 8) == BitVecVal(0b11101110, 8))
+        assert _try_prove(
+            BitVecVal(0b11001100, 8) | BitVecVal(0b10101010, 8) == BitVecVal(0b11101110, 8)
+        )
 
     def test_xor(self, kernel):
-        assert _try_prove(BitVecVal(0b11001100, 8) ^ BitVecVal(0b10101010, 8) == BitVecVal(0b01100110, 8))
+        assert _try_prove(
+            BitVecVal(0b11001100, 8) ^ BitVecVal(0b10101010, 8) == BitVecVal(0b01100110, 8)
+        )
 
     def test_not(self, kernel):
         assert _try_prove(~BitVecVal(0b11001100, 8) == BitVecVal(0b00110011, 8))
@@ -583,6 +662,7 @@ class TestBVSigned:
 # SECTION 5: ARRAY THEORY
 # ===================================================================
 
+
 class TestArraySemantics:
     """Array theory proofs — store/select axioms."""
 
@@ -615,8 +695,9 @@ class TestArraySemantics:
         a = K(IntSort(), IntVal(0))
         a = Store(a, IntVal(0), IntVal(10))
         a = Store(a, IntVal(1), IntVal(20))
-        assert _try_prove(And(Select(a, IntVal(0)) == IntVal(10),
-                              Select(a, IntVal(1)) == IntVal(20)))
+        assert _try_prove(
+            And(Select(a, IntVal(0)) == IntVal(10), Select(a, IntVal(1)) == IntVal(20))
+        )
 
     def test_constant_array_bool(self, kernel):
         """Constant True array: all elements are True."""
@@ -634,11 +715,14 @@ class TestArraySemantics:
 # SECTION 6: STRING THEORY
 # ===================================================================
 
+
 class TestStringGround:
     """Ground string proofs."""
 
     def test_concat(self, kernel):
-        assert _try_prove(StrConcat(StringVal("hello"), StringVal(" world")) == StringVal("hello world"))
+        assert _try_prove(
+            StrConcat(StringVal("hello"), StringVal(" world")) == StringVal("hello world")
+        )
 
     def test_length(self, kernel):
         assert _try_prove(Length(StringVal("hello")) == IntVal(5))
@@ -680,10 +764,15 @@ class TestStringGround:
         assert _try_prove(Contains(StringVal("abc"), StringVal("abc")))
 
     def test_replace(self, kernel):
-        assert _try_prove(Replace(StringVal("hello world"), StringVal("world"), StringVal("lean")) == StringVal("hello lean"))
+        assert _try_prove(
+            Replace(StringVal("hello world"), StringVal("world"), StringVal("lean"))
+            == StringVal("hello lean")
+        )
 
     def test_replace_no_match(self, kernel):
-        assert _try_prove(Replace(StringVal("abc"), StringVal("xyz"), StringVal("!")) == StringVal("abc"))
+        assert _try_prove(
+            Replace(StringVal("abc"), StringVal("xyz"), StringVal("!")) == StringVal("abc")
+        )
 
     def test_indexof_found(self, kernel):
         assert _try_prove(IndexOf(StringVal("abcdef"), StringVal("cd"), IntVal(0)) == IntVal(2))
@@ -741,6 +830,7 @@ class TestStringUniversal:
 # ===================================================================
 # SECTION 7: FLOATING-POINT PROOFS
 # ===================================================================
+
 
 class TestFPGroundArith:
     """Ground floating-point arithmetic proofs."""
@@ -859,6 +949,7 @@ class TestFPSpecialValues:
 # SECTION 8: QUANTIFIER PROOFS
 # ===================================================================
 
+
 class TestForAllProofs:
     """Universal quantifier proofs."""
 
@@ -942,16 +1033,14 @@ class TestUninterpretedFunctions:
         Mortal = Function("Mortal", Person, BoolSort())
         socrates = Const("socrates", Person)
         x = Const("x", Person)
-        premise = And(
-            ForAll([x], Implies(Human(x), Mortal(x))),
-            Human(socrates)
-        )
+        premise = And(ForAll([x], Implies(Human(x), Mortal(x))), Human(socrates))
         assert _try_prove(Implies(premise, Mortal(socrates)))
 
 
 # ===================================================================
 # SECTION 9: SOLVER SEMANTICS
 # ===================================================================
+
 
 class TestSolverSemantics:
     """Solver behavioral correctness tests."""
@@ -985,7 +1074,6 @@ class TestSolverSemantics:
         assert s.check() == unsat
 
     def test_push_pop_restores(self, kernel):
-        x = Int("x")
         s = Solver()
         s.add(BoolVal(True))
         s.push()
@@ -1045,6 +1133,7 @@ class TestSolverSemantics:
 # ===================================================================
 # SECTION 10: NEGATIVE PROOFS (things that should NOT be provable)
 # ===================================================================
+
 
 class TestNegativeProofs:
     """Claims that must NOT be provable."""
@@ -1113,6 +1202,7 @@ class TestNegativeProofs:
 # SECTION 11: IF-THEN-ELSE PROOFS
 # ===================================================================
 
+
 class TestIfThenElse:
     """Conditional expression proofs."""
 
@@ -1144,6 +1234,7 @@ class TestIfThenElse:
 # SECTION 12: DISTINCT
 # ===================================================================
 
+
 class TestDistinct:
     """Distinctness constraint proofs."""
 
@@ -1164,6 +1255,7 @@ class TestDistinct:
 # ===================================================================
 # SECTION 13: MIXED-SORT PROOFS
 # ===================================================================
+
 
 class TestMixedSort:
     """Cross-sort interaction proofs."""
@@ -1187,6 +1279,7 @@ class TestMixedSort:
 # ===================================================================
 # SECTION 14: SUM / PRODUCT / ABS
 # ===================================================================
+
 
 class TestSumProductAbs:
     """Aggregation function proofs."""
@@ -1221,6 +1314,7 @@ class TestSumProductAbs:
 # SECTION 15: LAMBDA APPLICATION
 # ===================================================================
 
+
 class TestLambdaApplication:
     """Lambda expression semantics via arrays."""
 
@@ -1247,6 +1341,7 @@ class TestLambdaApplication:
 # SECTION 16: COMPLEX COMBINED PROOFS
 # ===================================================================
 
+
 class TestComplexProofs:
     """Multi-step proofs combining multiple theories."""
 
@@ -1268,7 +1363,10 @@ class TestComplexProofs:
     def test_modular_identity(self, kernel):
         """(a + b) mod n = ((a mod n) + (b mod n)) mod n for n > 0"""
         # Ground instance: (7 + 8) mod 5 = ((7 mod 5) + (8 mod 5)) mod 5
-        assert _try_prove(IntVal(15) % IntVal(5) == ((IntVal(7) % IntVal(5)) + (IntVal(8) % IntVal(5))) % IntVal(5))
+        assert _try_prove(
+            IntVal(15) % IntVal(5)
+            == ((IntVal(7) % IntVal(5)) + (IntVal(8) % IntVal(5))) % IntVal(5)
+        )
 
     def test_bv_add_sub_inverse(self, kernel):
         """(x + y) - y = x for bitvectors."""
@@ -1282,12 +1380,15 @@ class TestComplexProofs:
 
     def test_concat_contains_parts(self, kernel):
         """'hello' ++ 'world' contains 'hello' as prefix (ground)."""
-        assert _try_prove(PrefixOf(StringVal("hello"), StrConcat(StringVal("hello"), StringVal("world"))))
+        assert _try_prove(
+            PrefixOf(StringVal("hello"), StrConcat(StringVal("hello"), StringVal("world")))
+        )
 
     def test_fp_mul_comm_ground(self, kernel):
         """FP multiplication is commutative for ground values."""
-        assert _try_prove(fpEQ(fpMul(RNE(), FPVal(2.0), FPVal(3.0)),
-                               fpMul(RNE(), FPVal(3.0), FPVal(2.0))))
+        assert _try_prove(
+            fpEQ(fpMul(RNE(), FPVal(2.0), FPVal(3.0)), fpMul(RNE(), FPVal(3.0), FPVal(2.0)))
+        )
 
     def test_array_swap(self, kernel):
         """Swapping two elements and reading back."""

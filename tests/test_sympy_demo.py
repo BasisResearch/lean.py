@@ -16,8 +16,7 @@ def _have(mod: str) -> bool:
 @pytest.mark.skipif(not _have("sympy"), reason="sympy not installed")
 def test_sympy_factorial(example_lib):
     # sympy.factorial returns a sympy.Integer; str(.) yields the decimal form.
-    assert example_lib.pythonEvalStr("__import__('sympy').factorial(20)") == \
-        "2432902008176640000"
+    assert example_lib.pythonEvalStr("__import__('sympy').factorial(20)") == "2432902008176640000"
 
 
 @pytest.mark.skipif(not _have("sympy"), reason="sympy not installed")

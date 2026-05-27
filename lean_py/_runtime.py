@@ -209,9 +209,7 @@ def _build_ffi_class(model: HeaderModel, structs: dict[str, type]) -> type:
         self._preloaded_libs: list[ctypes.CDLL] = []
         for lib in all_lean_runtime_libs():
             try:
-                self._preloaded_libs.append(
-                    ctypes.CDLL(str(lib), mode=ctypes.RTLD_GLOBAL)
-                )
+                self._preloaded_libs.append(ctypes.CDLL(str(lib), mode=ctypes.RTLD_GLOBAL))
             except OSError:
                 pass
         # The "main" libleanshared is the source of all the symbols we
@@ -245,9 +243,7 @@ def _build_ffi_class(model: HeaderModel, structs: dict[str, type]) -> type:
         # init code can run with the flag still true (which is required
         # by Lean's `initialize` blocks), then flip it after.
         try:
-            self.lean_io_mark_end_initialization = (
-                self.lib.lean_io_mark_end_initialization
-            )
+            self.lean_io_mark_end_initialization = self.lib.lean_io_mark_end_initialization
             self.lean_io_mark_end_initialization.argtypes = []
             self.lean_io_mark_end_initialization.restype = None
         except AttributeError:
@@ -291,9 +287,7 @@ def _build_ffi_class(model: HeaderModel, structs: dict[str, type]) -> type:
             try:
                 cfunc = getattr(lib, func.name)
                 if func.params:
-                    cfunc.argtypes = [
-                        _resolve_type(p.c_type, structs) for p in func.params
-                    ]
+                    cfunc.argtypes = [_resolve_type(p.c_type, structs) for p in func.params]
                 restype = _resolve_type(func.return_type, structs)
                 if restype is not None:
                     cfunc.restype = restype
@@ -478,9 +472,7 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
         # pointer that aliases into the Lean ctor's m_objs memory. If the
         # ctor is later freed (lean_dec), an aliased pointer would become
         # stale when the Lean allocator reuses the memory.
-        elem_addr = (
-            ctypes.addressof(ctor.contents) + offset + i * ctypes.sizeof(LeanObjectPtr)
-        )
+        elem_addr = ctypes.addressof(ctor.contents) + offset + i * ctypes.sizeof(LeanObjectPtr)
         raw_val = c_void_p.from_address(elem_addr).value or 0
         return ctypes.cast(c_void_p(raw_val), LeanObjectPtr)
 
@@ -572,9 +564,7 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
     def lean_alloc_array(self, size, capacity):
         fn = self._find_leanpy_helper("leanpy_alloc_array")
         if fn is None:
-            raise RuntimeError(
-                "leanpy_alloc_array not found — leanpy_native not linked"
-            )
+            raise RuntimeError("leanpy_alloc_array not found — leanpy_native not linked")
         fn.argtypes = [c_size_t, c_size_t]
         fn.restype = LeanObjectPtr
         return fn(size, capacity)
@@ -644,9 +634,7 @@ def _add_inline_methods(class_dict: dict, structs: dict, constants: dict):
             big.argtypes = [c_uint64]
             big.restype = LeanObjectPtr
             return big(c_uint64(n).value)
-        raise RuntimeError(
-            f"Cannot convert uint64 {n} to Nat: lean_big_uint64_to_nat not found"
-        )
+        raise RuntimeError(f"Cannot convert uint64 {n} to Nat: lean_big_uint64_to_nat not found")
 
     def lean_uint64_of_nat(self, p):
         # Inline: small scalar fast-path; large path via lean_uint64_of_big_nat.

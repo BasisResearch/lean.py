@@ -11,8 +11,6 @@ Lean kernel ADTs as fully-typed Python values. Tests:
 
 from __future__ import annotations
 
-import pytest
-
 
 def test_name_returned_from_lean(example_lib):
     """`makeName` returns a Lean.Name that Python decodes to a structured
@@ -63,8 +61,8 @@ def test_expr_built_in_python(example_lib):
     nat_lit_name = Name.str(Name.anonymous, "Nat")
     succ_name = Name.str(nat_lit_name, "succ")
     zero_name = Name.str(nat_lit_name, "zero")
-    f = Expr.const(succ_name, [])     # Expr.const "Nat.succ" []
-    x = Expr.const(zero_name, [])     # Expr.const "Nat.zero" []
+    f = Expr.const(succ_name, [])  # Expr.const "Nat.succ" []
+    x = Expr.const(zero_name, [])  # Expr.const "Nat.zero" []
     e = Expr.app(f, x)
     s = example_lib.py_expr_describe(e)
     assert s == "app (const Nat.succ) (const Nat.zero)"
@@ -82,9 +80,18 @@ def test_expr_lit_described(example_lib):
 def test_kernel_types_registered(example_lib):
     """Smoke test: every kernel ADT we promised to expose is present
     on the library."""
-    for name in ("Name", "Level", "Expr", "Syntax", "Literal",
-                 "BinderInfo", "MVarId", "FVarId", "LevelMVarId",
-                 "SourceInfo"):
+    for name in (
+        "Name",
+        "Level",
+        "Expr",
+        "Syntax",
+        "Literal",
+        "BinderInfo",
+        "MVarId",
+        "FVarId",
+        "LevelMVarId",
+        "SourceInfo",
+    ):
         assert hasattr(example_lib, name), f"missing {name}"
     # Constructors
     assert example_lib.Name.anonymous.ctor == "anonymous"

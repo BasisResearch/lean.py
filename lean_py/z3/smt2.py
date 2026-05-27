@@ -5,52 +5,50 @@
 
 from __future__ import annotations
 
-
 from lean_py.z3.core import (
-    ExprRef,
-    SortRef,
-    FuncDeclRef,
-    IntSort,
-    BoolSort,
-    RealSort,
-    BitVecSort,
-    ArraySort,
-    DeclareSort,
-    IntVal,
-    BoolVal,
-    BitVecVal,
-    StringVal,
-    Const,
-    Function,
+    UGE,
+    UGT,
+    ULE,
+    ULT,
     And,
-    Or,
-    Not,
-    Implies,
-    Xor,
-    If,
-    Distinct,
-    ForAll,
-    Exists,
-    Select,
-    Store,
+    ArraySort,
+    BitVecSort,
+    BitVecVal,
+    BoolSort,
+    BoolVal,
+    BV2Int,
     Concat,
+    Const,
+    DeclareSort,
+    Distinct,
+    Exists,
+    ExprRef,
     Extract,
-    ZeroExt,
-    SignExt,
+    ForAll,
+    FuncDeclRef,
+    Function,
+    If,
+    Implies,
+    Int2BV,
+    IntSort,
+    IntVal,
     LShR,
+    Not,
+    Or,
+    RealSort,
+    RepeatBitVec,
     RotateLeft,
     RotateRight,
-    RepeatBitVec,
-    ToReal,
+    Select,
+    SignExt,
+    SortRef,
+    Store,
+    StringVal,
     ToInt,
-    Int2BV,
-    BV2Int,
-    ULT,
-    ULE,
-    UGT,
-    UGE,
+    ToReal,
+    Xor,
+    ZeroExt,
 )
-
 
 # ---------------------------------------------------------------------------
 # S-expression tokenizer / parser
@@ -187,9 +185,7 @@ class _Smt2Env:
             return self.sorts[head]
         raise ValueError(f"Unknown sort: {sexpr}")
 
-    def resolve_expr(
-        self, sexpr: SExpr, let_env: dict[str, ExprRef] | None = None
-    ) -> ExprRef:
+    def resolve_expr(self, sexpr: SExpr, let_env: dict[str, ExprRef] | None = None) -> ExprRef:
         """Convert an S-expression to an ExprRef."""
         if let_env is None:
             let_env = {}
@@ -278,11 +274,7 @@ class _Smt2Env:
         # (_ op ...) at top level of application
         if head == "_":
             # This is an indexed identifier used standalone, e.g. (_ bv0 32)
-            if (
-                len(sexpr) >= 3
-                and isinstance(sexpr[1], str)
-                and sexpr[1].startswith("bv")
-            ):
+            if len(sexpr) >= 3 and isinstance(sexpr[1], str) and sexpr[1].startswith("bv"):
                 # (_ bvN width)
                 val = int(sexpr[1][2:])
                 width = int(sexpr[2])
@@ -585,6 +577,6 @@ def parse_smt2_file(
 
     This function is similar to :func:`parse_smt2_string`.
     """
-    with open(filename, "r") as f:
+    with open(filename) as f:
         content = f.read()
     return parse_smt2_string(content, sorts=sorts, decls=decls)

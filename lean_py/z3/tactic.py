@@ -8,7 +8,6 @@ from __future__ import annotations
 from lean_py.z3.core import And, BoolRef, BoolVal, Or
 from lean_py.z3.solver import Solver, _get_kernel, _marshal_expr, _wrap_free_vars
 
-
 # ---------------------------------------------------------------------------
 # Goal
 # ---------------------------------------------------------------------------

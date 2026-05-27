@@ -1,7 +1,5 @@
 """End-to-end tests for the Lean→Python marshalling pipeline."""
 
-import pytest
-
 from lean_py import LeanInductiveValue
 
 

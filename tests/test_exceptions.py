@@ -143,8 +143,9 @@ def test_python_callback_error_python_message_attr(example_lib):
         example_lib.propagatePythonError("undefined_x")
     e = ei.value
     assert "undefined_x" in e.python_message
-    assert not e.python_message.startswith("NameError:"), \
+    assert not e.python_message.startswith("NameError:"), (
         "python_message should be the unprefixed payload"
+    )
 
 
 def test_lean_error_no_python_attrs(example_lib):

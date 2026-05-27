@@ -59,7 +59,6 @@ def main() -> None:
             rhs,
         )
 
-    import z3
 
     print("== expr_to_z3 ==")
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ctypes
 import struct as _struct
+from collections.abc import Callable
 from ctypes import (
     c_double,
     c_int8,
@@ -36,12 +37,11 @@ from ctypes import (
     c_uint64,
     c_void_p,
 )
-from typing import Any, Callable
+from typing import Any
 
 from lean_py._runtime import _ptr_as_int, get_lean_ffi, get_structs
 from lean_py.exceptions import LeanError, LeanPyCallbackError, parse_io_error_message
 from lean_py.registry import CtorInfo, LibraryRegistry, TypeInfo, TypeRepr
-
 
 # ============================================================================
 #  Owned wrapper around a lean_object*
@@ -67,7 +67,7 @@ class LeanObj:
         self._owned = owned
 
     @classmethod
-    def borrow(cls, ptr: Any) -> "LeanObj":
+    def borrow(cls, ptr: Any) -> LeanObj:
         ffi = get_lean_ffi()
         if ptr:
             ffi.lean_inc(ptr)
@@ -191,8 +191,7 @@ class _CtorMeta(type):
         n_fields = len(cls.__match_args__) if hasattr(cls, "__match_args__") else 0
         if len(args) != n_fields:
             raise TypeError(
-                f"{cls._type_name}.{cls._ctor_name} expects {n_fields} args, "
-                f"got {len(args)}"
+                f"{cls._type_name}.{cls._ctor_name} expects {n_fields} args, got {len(args)}"
             )
         # Convert zero-arg _CtorMeta sentinels to LeanInductiveValue so that
         # all tree nodes are uniformly LeanInductiveValue for pattern matching.
@@ -206,16 +205,10 @@ class _CtorMeta(type):
 
     def __instancecheck__(cls, instance):
         if isinstance(instance, LeanInductiveValue):
-            return (
-                instance.ctor == cls._ctor_name
-                and instance._type_name == cls._type_name
-            )
+            return instance.ctor == cls._ctor_name and instance._type_name == cls._type_name
         if type(instance) is _CtorMeta:
             # Allow isinstance(Color.red, Color.red) — both are _CtorMeta classes
-            return (
-                instance._ctor_name == cls._ctor_name
-                and instance._type_name == cls._type_name
-            )
+            return instance._ctor_name == cls._ctor_name and instance._type_name == cls._type_name
         return False
 
     def __repr__(cls):
@@ -229,10 +222,7 @@ class _CtorMeta(type):
                 and other.fields == ()
             )
         if isinstance(other, _CtorMeta):
-            return (
-                cls._type_name == other._type_name
-                and cls._ctor_name == other._ctor_name
-            )
+            return cls._type_name == other._type_name and cls._ctor_name == other._ctor_name
         return NotImplemented
 
     def __hash__(cls):
@@ -272,17 +262,13 @@ class LeanInductiveValue:
             idx = int(name[1:])
             if idx < len(self.fields):
                 return self.fields[idx]
-            raise AttributeError(
-                f"field index {idx} out of range (have {len(self.fields)} fields)"
-            )
+            raise AttributeError(f"field index {idx} out of range (have {len(self.fields)} fields)")
         raise AttributeError(name)
 
     def __repr__(self) -> str:
         if not self.fields:
             return f"{self._type_name}.{self.ctor}"
-        return (
-            f"{self._type_name}.{self.ctor}({', '.join(repr(f) for f in self.fields)})"
-        )
+        return f"{self._type_name}.{self.ctor}({', '.join(repr(f) for f in self.fields)})"
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, LeanInductiveValue):
@@ -417,9 +403,7 @@ def _build_smart_ctors(ffi) -> dict[tuple[str, str], Callable]:
             for i, c in enumerate(ch[:_n]):
                 if _st and i == _n - 1:
                     # Trailing BinderInfo / Bool — unbox to uint8.
-                    c_args.append(
-                        ffi.lean_unbox(c) if ffi.lean_is_scalar(c) else _ptr_as_int(c)
-                    )
+                    c_args.append(ffi.lean_unbox(c) if ffi.lean_is_scalar(c) else _ptr_as_int(c))
                 else:
                     c_args.append(_ptr_as_int(c))
             _fn.restype = c_void_p
@@ -470,7 +454,7 @@ class Marshaller:
             raise TypeError(f"expected str, got {type(s).__name__}")
         return self.ffi.mk_string(s)
 
-    def _lean_array_to_py(self, ptr: Any, elem_w: "TypeWrapper") -> list:
+    def _lean_array_to_py(self, ptr: Any, elem_w: TypeWrapper) -> list:
         n = self.ffi.lean_array_size(ptr)
         out = []
         for i in range(n):
@@ -481,7 +465,7 @@ class Marshaller:
             out.append(elem_w.from_lean(e_ptr))
         return out
 
-    def _py_to_lean_array(self, xs, elem_w: "TypeWrapper") -> Any:
+    def _py_to_lean_array(self, xs, elem_w: TypeWrapper) -> Any:
         """Build a Lean Array from a Python iterable. Returns owned ptr."""
         items = list(xs)
         arr = self.ffi.lean_alloc_array(len(items), len(items))
@@ -634,9 +618,7 @@ class Marshaller:
 
     # -- public --------------------------------------------------------------
 
-    def decode_lean_obj(
-        self, type_name: str, lean_obj: "LeanObj"
-    ) -> LeanInductiveValue:
+    def decode_lean_obj(self, type_name: str, lean_obj: LeanObj) -> LeanInductiveValue:
         """Decode a ``LeanObj`` (raw ``lean_object*``) as a registered inductive.
 
         This is the entry point for Path B (tactic): Lean wraps an ``Expr``
@@ -756,12 +738,8 @@ class Marshaller:
                 to_lean,
                 c_double,
                 ctor_scalar_size=8,
-                from_ctor_scalar=lambda raw: _struct.unpack(
-                    "d", _struct.pack("Q", raw)
-                )[0],
-                to_ctor_scalar=lambda f: _struct.unpack(
-                    "Q", _struct.pack("d", float(f))
-                )[0],
+                from_ctor_scalar=lambda raw: _struct.unpack("d", _struct.pack("Q", raw))[0],
+                to_ctor_scalar=lambda f: _struct.unpack("Q", _struct.pack("d", float(f)))[0],
             )
 
         if k == "uint":
@@ -1161,7 +1139,7 @@ class Marshaller:
         except Exception:
             return ""
 
-    def _build_io_exception(self, ptr: Any) -> "Exception":
+    def _build_io_exception(self, ptr: Any) -> Exception:
         """Decode an `IO.Error` ctor pointer into a typed exception.
 
         For `userError` — the most common, used by every `LeanPy.Python.*`

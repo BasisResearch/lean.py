@@ -5,9 +5,6 @@ invoke CPython internally. The Lean side dlopens libpython at runtime
 (via `LeanPy.Python.init`), so we exercise the whole loader path.
 """
 
-import math
-import sys
-
 import pytest
 
 

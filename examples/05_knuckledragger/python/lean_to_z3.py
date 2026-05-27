@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 #  Name helpers
 # ---------------------------------------------------------------------------
 
+
 def name_to_str(name: LeanInductiveValue) -> str:
     """Walk a ``Lean.Name`` ADT (anonymous / str / num) to a dot-separated string."""
     parts: list[str] = []
@@ -53,13 +54,14 @@ def name_to_str(name: LeanInductiveValue) -> str:
 #  Expr helpers
 # ---------------------------------------------------------------------------
 
+
 def uncurry_app(expr: LeanInductiveValue) -> tuple[LeanInductiveValue, list[LeanInductiveValue]]:
     """Flatten nested ``Expr.app(f, x)`` into ``(head, [arg0, arg1, ...])``."""
     args: list[LeanInductiveValue] = []
     cur = expr
     while cur.ctor == "app":
-        args.append(cur._1)   # arg
-        cur = cur._0          # fn
+        args.append(cur._1)  # arg
+        cur = cur._0  # fn
     args.reverse()
     return cur, args
 
@@ -81,15 +83,18 @@ def _var(name: str) -> z3.ArithRef:
 #  Main converter
 # ---------------------------------------------------------------------------
 
+
 def _binop(op):
     def build(args):
         return op(expr_to_z3(args[-2]), expr_to_z3(args[-1]))
+
     return 2, build
 
 
 def _unop(op):
     def build(args):
         return op(expr_to_z3(args[-1]))
+
     return 1, build
 
 
@@ -98,11 +103,11 @@ _DISPATCH: dict[str, tuple[int, object]] = {
     "HSub.hSub": _binop(lambda a, b: a - b),
     "HMul.hMul": _binop(lambda a, b: a * b),
     "HDiv.hDiv": _binop(lambda a, b: a / b),
-    "HPow.hPow": _binop(lambda a, b: a ** b),
-    "Eq":        (2, lambda args: expr_to_z3(args[-2]) == expr_to_z3(args[-1])),
-    "Neg.neg":   _unop(lambda x: -x),
+    "HPow.hPow": _binop(lambda a, b: a**b),
+    "Eq": (2, lambda args: expr_to_z3(args[-2]) == expr_to_z3(args[-1])),
+    "Neg.neg": _unop(lambda x: -x),
     "HNeg.hNeg": _unop(lambda x: -x),
-    "Nat.succ":  (1, lambda args: expr_to_z3(args[-1]) + 1),
+    "Nat.succ": (1, lambda args: expr_to_z3(args[-1]) + 1),
     "Int.ofNat": (1, lambda args: expr_to_z3(args[-1])),
     "Int.negSucc": (1, lambda args: -(expr_to_z3(args[-1]) + 1)),
 }
@@ -179,6 +184,7 @@ def expr_to_z3(expr: LeanInductiveValue):
 #  Proposition checkers
 # ---------------------------------------------------------------------------
 
+
 def check_prop(prop) -> bool:
     """Check a proposition via Knuckledragger (backed by Z3)."""
     try:
@@ -208,9 +214,7 @@ def decode_and_check_prop(lean_obj) -> bool:
     Called from the Lean tactic via ``Py.ofLeanObj`` + ``@[python]``.
     """
     if _marshaller is None:
-        raise RuntimeError(
-            "lean_to_z3.setup(lib) must be called before decode_and_check_prop"
-        )
+        raise RuntimeError("lean_to_z3.setup(lib) must be called before decode_and_check_prop")
     expr_tree = _marshaller.decode_lean_obj("Lean.Expr", lean_obj)
     prop = expr_to_z3(expr_tree)
     return check_prop(prop)
