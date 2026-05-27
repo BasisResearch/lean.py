@@ -663,6 +663,17 @@ class TestDatatype:
         p = Pair.mk(x, y)
         assert isinstance(p._ast, InductiveCtorNode)
 
+    def test_uninterpreted_sort_field(self, kernel):
+        """Datatype with a DeclareSort field should not fail (issue #9)."""
+        HeapRef = DeclareSort("HeapRef")
+        dt = Datatype("optional_HeapRef_")
+        dt.declare("missing")
+        dt.declare("present", ("valueat", HeapRef))
+        result = dt.create()
+        assert hasattr(result, "missing")
+        assert hasattr(result, "present")
+        assert hasattr(result, "valueat")
+
 
 class TestDatatypeStructural:
     """Test that inductive datatypes enable structural proofs."""
@@ -712,6 +723,16 @@ class TestDatatypeStructural:
         Color = Color.create()
         assert _try_prove(Color.is_red(Color.red))
         assert _try_prove(Not(Color.is_red(Color.green)))
+
+    def test_uninterp_sort_field_disjointness(self, kernel):
+        """Constructors of a datatype with DeclareSort fields are distinct (issue #9)."""
+        Ref = DeclareSort("Ref_s7")
+        Opt = Datatype('OptRef_s7')
+        Opt.declare('none_')
+        Opt.declare('some_', ('val', Ref))
+        Opt = Opt.create()
+        x = Const('x', Ref)
+        assert _try_prove(Opt.none_ != Opt.some_(x))
 
 
 # ------------------------------------------------------------------

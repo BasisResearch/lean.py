@@ -18,7 +18,7 @@ from decimal import Decimal, getcontext
 from fractions import Fraction
 from typing import Any, Sequence
 
-from lean_py.z3._inductive_reg import _register_inductive
+from lean_py.z3._inductive_reg import _declared_uninterp_sorts, _register_inductive
 from lean_py.z3._ast import (
     ASTNode,
     ASTSort,
@@ -928,11 +928,13 @@ class FuncDeclRef:
         # The function itself is a free variable
         merged = merged | frozenset([(self._name, self._ast_sort)])
         # Uninterpreted sorts used by the function are also free
+        # (unless already declared as axioms in the Lean environment)
         for s in (*self._domain, self._range):
             if isinstance(s, UninterpretedSortRef) and isinstance(
                 s._ast_sort, UninterpASTSort
             ):
-                merged = merged | frozenset([(s._ast_sort.name, TypeASTSort())])
+                if s._ast_sort.name not in _declared_uninterp_sorts:
+                    merged = merged | frozenset([(s._ast_sort.name, TypeASTSort())])
         func_ast = _AstVar(self._name)
         args_ast = tuple(a._ast for a in args)
         ast = AppNode(func_ast, args_ast) if args else func_ast
@@ -1106,11 +1108,15 @@ def Array(name: str, domain: SortRef, range_sort: SortRef) -> ArrayRef:
 
 def Const(name: str, sort: SortRef) -> ExprRef:
     v: frozenset[tuple[str, ASTSort]] = frozenset([(name, sort._ast_sort)])
-    # If the sort is uninterpreted, also track it as a free type variable.
+    # If the sort is uninterpreted and not yet declared as a Lean axiom,
+    # track it as a free type variable so ForAll wraps it.  Sorts that
+    # have been declared (e.g. used in a Datatype field) are already
+    # axioms in the Lean environment and must not be re-bound.
     if isinstance(sort, UninterpretedSortRef) and isinstance(
         sort._ast_sort, UninterpASTSort
     ):
-        v = v | frozenset([(sort._ast_sort.name, TypeASTSort())])
+        if sort._ast_sort.name not in _declared_uninterp_sorts:
+            v = v | frozenset([(sort._ast_sort.name, TypeASTSort())])
     if isinstance(sort, BoolSortRef):
         return BoolRef(_AstVar(name), v)
     if isinstance(sort, ArithSortRef):
@@ -3915,9 +3921,7 @@ def CharFromBv(bv: BitVecRef, ctx: Context | None = None) -> CharRef:
 
 
 def CharToBv(ch: ExprRef, ctx: Context | None = None) -> BitVecRef:
-    return BitVecRef(
-        CharToNatNode(ch._ast), BitVecSort(21), ch._vars
-    )
+    return BitVecRef(CharToNatNode(ch._ast), BitVecSort(21), ch._vars)
 
 
 def CharToInt(ch: ExprRef, ctx: Context | None = None) -> ArithRef:
