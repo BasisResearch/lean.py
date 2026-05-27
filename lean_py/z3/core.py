@@ -14,26 +14,40 @@ from __future__ import annotations
 
 import math
 import struct
+from collections.abc import Sequence
 from decimal import Decimal, getcontext
 from fractions import Fraction
-from typing import Any, Sequence
+from typing import Any
 
-from lean_py.z3._inductive_reg import _register_inductive
 from lean_py.z3._ast import (
-    ASTNode,
-    ASTSort,
     AppNode,
     ArrowASTSort,
-    BitvecASTSort,
+    ASTNode,
+    ASTSort,
     BinOp,
     BinOpNode,
+    BitvecASTSort,
     BoolLit,
     BvLit,
+    CharASTSort,
+    CharFromBvNode,
+    CharIsDigitNode,
+    CharLit,
+    CharToNatNode,
     ConstArrayNode,
     DistinctNode,
     ExistsNode,
     ExtractNode,
+    FinDomainASTSort,
+    FinDomainLit,
     ForAllNode,
+    FpASTSort,
+    FpLitNode,
+    FpOpNode,
+    InductiveAccessorNode,
+    InductiveASTSort,
+    InductiveCtorNode,
+    InductiveRecognizerNode,
     InReNode,
     Int2BvNode,
     IntASTSort,
@@ -45,8 +59,8 @@ from lean_py.z3._ast import (
     NatLit,
     PropSort,
     RealASTSort,
-    ReConcatNode,
     ReComplementNode,
+    ReConcatNode,
     ReIntersectNode,
     ReLoopNode,
     ReOptionNode,
@@ -55,51 +69,40 @@ from lean_py.z3._ast import (
     ReStarNode,
     ReUnionNode,
     SelectNode,
+    SeqASTSort,
+    SeqConcatNode,
+    SeqContainsNode,
+    SeqEmptyNode,
+    SeqLenNode,
+    SeqNthNode,
+    SeqPrefixOfNode,
+    SeqSuffixOfNode,
+    SeqUnitNode,
     SignExtNode,
     StoreNode,
     StrConcatNode,
     StrContainsNode,
     StrIndexOfNode,
+    StringASTSort,
+    StringLit,
     StrLenNode,
     StrPrefixOfNode,
     StrReplaceNode,
     StrSubstrNode,
     StrSuffixOfNode,
     StrToIntNode,
-    StringASTSort,
-    StringLit,
     ToIntNode,
     ToRealNode,
-    UnOp,
     TypeASTSort,
-    UnOpNode,
     UninterpASTSort,
-    Var as _AstVar,
+    UnOp,
+    UnOpNode,
     ZeroExtNode,
-    FpASTSort,
-    FpLitNode,
-    FpOpNode,
-    FinDomainASTSort,
-    FinDomainLit,
-    InductiveASTSort,
-    InductiveCtorNode,
-    InductiveAccessorNode,
-    InductiveRecognizerNode,
-    CharASTSort,
-    CharLit,
-    CharToNatNode,
-    CharFromBvNode,
-    CharIsDigitNode,
-    SeqASTSort,
-    SeqEmptyNode,
-    SeqUnitNode,
-    SeqLenNode,
-    SeqConcatNode,
-    SeqContainsNode,
-    SeqPrefixOfNode,
-    SeqSuffixOfNode,
-    SeqNthNode,
 )
+from lean_py.z3._ast import (
+    Var as _AstVar,
+)
+from lean_py.z3._inductive_reg import _declared_uninterp_sorts, _register_inductive
 
 
 def _is_literal(node: ASTNode) -> bool:
@@ -329,9 +332,7 @@ class ExprRef:
         return hash(self._ast)
 
     def __bool__(self) -> bool:
-        raise TypeError(
-            "Symbolic expressions cannot be cast to concrete Boolean values"
-        )
+        raise TypeError("Symbolic expressions cannot be cast to concrete Boolean values")
 
     def num_args(self) -> int:
         """Number of arguments (children) of this expression."""
@@ -802,9 +803,7 @@ class QuantifierRef(BoolRef):
     ) -> None:
         # Build nested ForAllNode/ExistsNode from inside out
         bound_names = frozenset(
-            (v._ast.name, v._sort._ast_sort)
-            for v in bound
-            if isinstance(v._ast, _AstVar)
+            (v._ast.name, v._sort._ast_sort) for v in bound if isinstance(v._ast, _AstVar)
         )
         free = body._vars - bound_names
 
@@ -919,20 +918,16 @@ class FuncDeclRef:
 
     def __call__(self, *args: ExprRef) -> ExprRef:
         if len(args) != len(self._domain):
-            raise TypeError(
-                f"{self._name} expects {len(self._domain)} args, got {len(args)}"
-            )
-        merged: frozenset[tuple[str, ASTSort]] = frozenset().union(
-            *(a._vars for a in args)
-        )
+            raise TypeError(f"{self._name} expects {len(self._domain)} args, got {len(args)}")
+        merged: frozenset[tuple[str, ASTSort]] = frozenset().union(*(a._vars for a in args))
         # The function itself is a free variable
         merged = merged | frozenset([(self._name, self._ast_sort)])
         # Uninterpreted sorts used by the function are also free
+        # (unless already declared as axioms in the Lean environment)
         for s in (*self._domain, self._range):
-            if isinstance(s, UninterpretedSortRef) and isinstance(
-                s._ast_sort, UninterpASTSort
-            ):
-                merged = merged | frozenset([(s._ast_sort.name, TypeASTSort())])
+            if isinstance(s, UninterpretedSortRef) and isinstance(s._ast_sort, UninterpASTSort):
+                if s._ast_sort.name not in _declared_uninterp_sorts:
+                    merged = merged | frozenset([(s._ast_sort.name, TypeASTSort())])
         func_ast = _AstVar(self._name)
         args_ast = tuple(a._ast for a in args)
         ast = AppNode(func_ast, args_ast) if args else func_ast
@@ -977,9 +972,7 @@ class _InductiveCtorDecl(FuncDeclRef):
 
     def __call__(self, *args: ExprRef) -> DatatypeRef:
         if len(args) != len(self._domain):
-            raise TypeError(
-                f"{self._ctor_name} expects {len(self._domain)} args, got {len(args)}"
-            )
+            raise TypeError(f"{self._ctor_name} expects {len(self._domain)} args, got {len(args)}")
         coerced = []
         for a, d in zip(args, self._domain):
             if isinstance(a, (int, float)):
@@ -988,9 +981,7 @@ class _InductiveCtorDecl(FuncDeclRef):
         merged: frozenset[tuple[str, ASTSort]] = (
             frozenset().union(*(a._vars for a in coerced)) if coerced else frozenset()
         )
-        ast = InductiveCtorNode(
-            self._type_name, self._ctor_name, tuple(a._ast for a in coerced)
-        )
+        ast = InductiveCtorNode(self._type_name, self._ctor_name, tuple(a._ast for a in coerced))
         return DatatypeRef(ast, self._result_sort, merged)
 
 
@@ -1106,11 +1097,13 @@ def Array(name: str, domain: SortRef, range_sort: SortRef) -> ArrayRef:
 
 def Const(name: str, sort: SortRef) -> ExprRef:
     v: frozenset[tuple[str, ASTSort]] = frozenset([(name, sort._ast_sort)])
-    # If the sort is uninterpreted, also track it as a free type variable.
-    if isinstance(sort, UninterpretedSortRef) and isinstance(
-        sort._ast_sort, UninterpASTSort
-    ):
-        v = v | frozenset([(sort._ast_sort.name, TypeASTSort())])
+    # If the sort is uninterpreted and not yet declared as a Lean axiom,
+    # track it as a free type variable so ForAll wraps it.  Sorts that
+    # have been declared (e.g. used in a Datatype field) are already
+    # axioms in the Lean environment and must not be re-bound.
+    if isinstance(sort, UninterpretedSortRef) and isinstance(sort._ast_sort, UninterpASTSort):
+        if sort._ast_sort.name not in _declared_uninterp_sorts:
+            v = v | frozenset([(sort._ast_sort.name, TypeASTSort())])
     if isinstance(sort, BoolSortRef):
         return BoolRef(_AstVar(name), v)
     if isinstance(sort, ArithSortRef):
@@ -1153,10 +1146,10 @@ def RealVal(n: int | float | str) -> ArithRef:
         return RatNumRef(num, den)
     if isinstance(n, str):
         if "/" in n:
-            num, den = n.split("/", 1)
-            return RatNumRef(int(num.strip()), int(den.strip()))
-        n = float(n) if "." in n or "e" in n.lower() else int(n)
-        return RealVal(n)
+            num_s, den_s = n.split("/", 1)
+            return RatNumRef(int(num_s.strip()), int(den_s.strip()))
+        coerced: int | float = float(n) if "." in n or "e" in n.lower() else int(n)
+        return RealVal(coerced)
     return ArithRef(ToRealNode(IntLit(n)), RealSort())
 
 
@@ -1197,9 +1190,7 @@ def Store(a: ArrayRef, idx: ExprRef, val: ExprRef) -> ArrayRef:
     sort = a._sort
     if not isinstance(sort, ArraySortRef):
         raise TypeError(f"Store requires ArrayRef, got {type(a)}")
-    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(
-        a._vars, idx._vars, val._vars
-    )
+    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(a._vars, idx._vars, val._vars)
     return ArrayRef(
         StoreNode(a._ast, idx._ast, val._ast),
         sort,
@@ -1227,13 +1218,9 @@ class _DatatypeBuilder:
 
     def __init__(self, name: str) -> None:
         self._name = name
-        self._ctors: list[
-            tuple[str, tuple[tuple[str, SortRef | _DatatypeBuilder], ...]]
-        ] = []
+        self._ctors: list[tuple[str, tuple[tuple[str, SortRef | _DatatypeBuilder], ...]]] = []
 
-    def declare(
-        self, ctor_name: str, *fields: tuple[str, SortRef | _DatatypeBuilder]
-    ) -> None:
+    def declare(self, ctor_name: str, *fields: tuple[str, SortRef | _DatatypeBuilder]) -> None:
         self._ctors.append((ctor_name, tuple(fields)))
 
     def create(self) -> DatatypeSortRef:
@@ -1244,9 +1231,7 @@ class _DatatypeBuilder:
         for ctor_name, fields in self._ctors:
             if fields:
                 domain = tuple(
-                    DatatypeSortRef(
-                        InductiveASTSort(f[1]._name), f[1]._name, f[1]._ctors
-                    )
+                    DatatypeSortRef(InductiveASTSort(f[1]._name), f[1]._name, f[1]._ctors)
                     if isinstance(f[1], _DatatypeBuilder)
                     else f[1]
                     for f in fields
@@ -1256,16 +1241,12 @@ class _DatatypeBuilder:
                 sort._constructors.append(ctor)
             else:
                 # Nullary: z3py stores a DatatypeRef directly
-                val = DatatypeRef(
-                    InductiveCtorNode(self._name, ctor_name, ()), sort, frozenset()
-                )
+                val = DatatypeRef(InductiveCtorNode(self._name, ctor_name, ()), sort, frozenset())
                 setattr(sort, ctor_name, val)
                 sort._constructors.append(val)
 
             # Recognizer: sort.is_<ctor_name>
-            rec = _InductiveRecognizerDecl(
-                self._name, f"is_{ctor_name}", (sort,), BoolSort()
-            )
+            rec = _InductiveRecognizerDecl(self._name, f"is_{ctor_name}", (sort,), BoolSort())
             setattr(sort, f"is_{ctor_name}", rec)
             sort._recognizers.append(rec)
 
@@ -1274,9 +1255,7 @@ class _DatatypeBuilder:
             for field_name, field_sort in fields:
                 if isinstance(field_sort, _DatatypeBuilder):
                     field_sort = sort  # self-reference
-                acc = _InductiveAccessorDecl(
-                    self._name, field_name, (sort,), field_sort
-                )
+                acc = _InductiveAccessorDecl(self._name, field_name, (sort,), field_sort)
                 setattr(sort, field_name, acc)
                 ctor_accessors.append(acc)
             sort._accessors.append(ctor_accessors)
@@ -1368,9 +1347,7 @@ def Xor(a: BoolRef, b: BoolRef) -> BoolRef:
 
 
 def If(c: BoolRef, t: ExprRef, e: ExprRef) -> ExprRef:
-    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(
-        c._vars, t._vars, e._vars
-    )
+    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(c._vars, t._vars, e._vars)
     ast = IteNode(c._ast, t._ast, e._ast)
     sort = t._sort
     # Return the appropriate subclass so arithmetic/comparison ops work
@@ -1584,9 +1561,7 @@ def Concat(*args: BitVecRef) -> BitVecRef:
     for b in args[1:]:
         a_sort = result._sort
         b_sort = b._sort
-        if not isinstance(a_sort, BitVecSortRef) or not isinstance(
-            b_sort, BitVecSortRef
-        ):
+        if not isinstance(a_sort, BitVecSortRef) or not isinstance(b_sort, BitVecSortRef):
             raise TypeError("Concat requires BitVecRef arguments")
         width = a_sort._width + b_sort._width
         result = BitVecRef(
@@ -1803,9 +1778,7 @@ def _substitute_ast(ast: ASTNode, mapping: dict[str, ASTNode]) -> ASTNode:
     if isinstance(ast, DistinctNode):
         return DistinctNode(tuple(_substitute_ast(a, mapping) for a in ast.args))
     if isinstance(ast, SelectNode):
-        return SelectNode(
-            _substitute_ast(ast.arr, mapping), _substitute_ast(ast.idx, mapping)
-        )
+        return SelectNode(_substitute_ast(ast.arr, mapping), _substitute_ast(ast.idx, mapping))
     if isinstance(ast, StoreNode):
         return StoreNode(
             _substitute_ast(ast.arr, mapping),
@@ -1831,9 +1804,7 @@ def _substitute_ast(ast: ASTNode, mapping: dict[str, ASTNode]) -> ASTNode:
         inner.pop(ast.name, None)
         return LambdaNode(ast.name, ast.sort, _substitute_ast(ast.body, inner))
     if isinstance(ast, StrConcatNode):
-        return StrConcatNode(
-            _substitute_ast(ast.lhs, mapping), _substitute_ast(ast.rhs, mapping)
-        )
+        return StrConcatNode(_substitute_ast(ast.lhs, mapping), _substitute_ast(ast.rhs, mapping))
     if isinstance(ast, StrLenNode):
         return StrLenNode(_substitute_ast(ast.arg, mapping))
     if isinstance(ast, StrContainsNode):
@@ -1871,9 +1842,7 @@ def _substitute_ast(ast: ASTNode, mapping: dict[str, ASTNode]) -> ASTNode:
     if isinstance(ast, IntToStrNode):
         return IntToStrNode(_substitute_ast(ast.arg, mapping))
     if isinstance(ast, InReNode):
-        return InReNode(
-            _substitute_ast(ast.s, mapping), _substitute_ast(ast.re, mapping)
-        )
+        return InReNode(_substitute_ast(ast.s, mapping), _substitute_ast(ast.re, mapping))
     if isinstance(ast, ReStarNode):
         return ReStarNode(_substitute_ast(ast.arg, mapping))
     if isinstance(ast, RePlusNode):
@@ -1881,17 +1850,11 @@ def _substitute_ast(ast: ASTNode, mapping: dict[str, ASTNode]) -> ASTNode:
     if isinstance(ast, ReOptionNode):
         return ReOptionNode(_substitute_ast(ast.arg, mapping))
     if isinstance(ast, ReUnionNode):
-        return ReUnionNode(
-            _substitute_ast(ast.a, mapping), _substitute_ast(ast.b, mapping)
-        )
+        return ReUnionNode(_substitute_ast(ast.a, mapping), _substitute_ast(ast.b, mapping))
     if isinstance(ast, ReIntersectNode):
-        return ReIntersectNode(
-            _substitute_ast(ast.a, mapping), _substitute_ast(ast.b, mapping)
-        )
+        return ReIntersectNode(_substitute_ast(ast.a, mapping), _substitute_ast(ast.b, mapping))
     if isinstance(ast, ReConcatNode):
-        return ReConcatNode(
-            _substitute_ast(ast.a, mapping), _substitute_ast(ast.b, mapping)
-        )
+        return ReConcatNode(_substitute_ast(ast.a, mapping), _substitute_ast(ast.b, mapping))
     if isinstance(ast, ReComplementNode):
         return ReComplementNode(_substitute_ast(ast.arg, mapping))
     if isinstance(ast, ReLoopNode):
@@ -2351,23 +2314,17 @@ def SuffixOf(suf: StringRef | SeqRef, s: StringRef | SeqRef) -> BoolRef:
 
 def Replace(s: StringRef, old: StringRef, new: StringRef) -> StringRef:
     """Replace first occurrence of old with new in s."""
-    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(
-        s._vars, old._vars, new._vars
-    )
+    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(s._vars, old._vars, new._vars)
     return StringRef(StrReplaceNode(s._ast, old._ast, new._ast), merged)
 
 
-def SubString(
-    s: StringRef, offset: ArithRef | int, length: ArithRef | int
-) -> StringRef:
+def SubString(s: StringRef, offset: ArithRef | int, length: ArithRef | int) -> StringRef:
     """Extract substring."""
     if isinstance(offset, int):
         offset = IntVal(offset)
     if isinstance(length, int):
         length = IntVal(length)
-    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(
-        s._vars, offset._vars, length._vars
-    )
+    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(s._vars, offset._vars, length._vars)
     return StringRef(StrSubstrNode(s._ast, offset._ast, length._ast), merged)
 
 
@@ -2375,9 +2332,7 @@ def IndexOf(s: StringRef, substr: StringRef, offset: ArithRef | int = 0) -> Arit
     """Find index of substr in s starting at offset."""
     if isinstance(offset, int):
         offset = IntVal(offset)
-    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(
-        s._vars, substr._vars, offset._vars
-    )
+    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(s._vars, substr._vars, offset._vars)
     return ArithRef(StrIndexOfNode(s._ast, substr._ast, offset._ast), IntSort(), merged)
 
 
@@ -2462,9 +2417,7 @@ def Intersect(*args: ReRef) -> ReRef:
         raise TypeError("Intersect requires at least 2 arguments")
     result = args[0]
     for a in args[1:]:
-        result = ReRef(
-            ReIntersectNode(result._ast, a._ast), _merge(result._vars, a._vars)
-        )
+        result = ReRef(ReIntersectNode(result._ast, a._ast), _merge(result._vars, a._vars))
     return result
 
 
@@ -2847,9 +2800,7 @@ def _ast_decl_name(node: ASTNode) -> str:
     return type(node).__name__
 
 
-def _make_typed_expr(
-    ast: ASTNode, sort: SortRef, vars: frozenset[tuple[str, ASTSort]]
-) -> ExprRef:
+def _make_typed_expr(ast: ASTNode, sort: SortRef, vars: frozenset[tuple[str, ASTSort]]) -> ExprRef:
     """Create appropriately-typed ExprRef subclass for a sort."""
     if isinstance(sort, BoolSortRef):
         return BoolRef(ast, vars)
@@ -2963,7 +2914,9 @@ def _ast_repr(node: ASTNode) -> str:
     if isinstance(node, UnOpNode):
         return f"({node.op} {_ast_repr(node.arg)})"
     if isinstance(node, IteNode):
-        return f"(if {_ast_repr(node.cond)} then {_ast_repr(node.then_)} else {_ast_repr(node.else_)})"
+        return (
+            f"(if {_ast_repr(node.cond)} then {_ast_repr(node.then_)} else {_ast_repr(node.else_)})"
+        )
     if isinstance(node, ForAllNode):
         return f"(\u2200 {node.name}, {_ast_repr(node.body)})"
     if isinstance(node, ExistsNode):
@@ -2977,9 +2930,7 @@ def _ast_repr(node: ASTNode) -> str:
     if isinstance(node, SelectNode):
         return f"(select {_ast_repr(node.arr)} {_ast_repr(node.idx)})"
     if isinstance(node, StoreNode):
-        return (
-            f"(store {_ast_repr(node.arr)} {_ast_repr(node.idx)} {_ast_repr(node.val)})"
-        )
+        return f"(store {_ast_repr(node.arr)} {_ast_repr(node.idx)} {_ast_repr(node.val)})"
     if isinstance(node, ConstArrayNode):
         return f"(const-array {_ast_repr(node.val)})"
     if isinstance(node, ExtractNode):
@@ -3013,7 +2964,9 @@ def _ast_repr(node: ASTNode) -> str:
     if isinstance(node, StrSubstrNode):
         return f"(str.substr {_ast_repr(node.s)} {_ast_repr(node.offset)} {_ast_repr(node.length)})"
     if isinstance(node, StrIndexOfNode):
-        return f"(str.indexof {_ast_repr(node.s)} {_ast_repr(node.substr)} {_ast_repr(node.offset)})"
+        return (
+            f"(str.indexof {_ast_repr(node.s)} {_ast_repr(node.substr)} {_ast_repr(node.offset)})"
+        )
     if isinstance(node, StrToIntNode):
         return f"(str.to_int {_ast_repr(node.arg)})"
     if isinstance(node, IntToStrNode):
@@ -3435,9 +3388,7 @@ def fpSqrt(rm: FPRMRef, a: FPRef, ctx: Context | None = None) -> FPRef:
     return _fp_op("fpSqrt", rm, a)
 
 
-def fpFMA(
-    rm: FPRMRef, a: FPRef, b: FPRef, c: FPRef, ctx: Context | None = None
-) -> FPRef:
+def fpFMA(rm: FPRMRef, a: FPRef, b: FPRef, c: FPRef, ctx: Context | None = None) -> FPRef:
     return _fp_op("fpFMA", rm, a, b, c)
 
 
@@ -3508,25 +3459,19 @@ def fpToReal(a: FPRef, ctx: Context | None = None) -> ArithRef:
     return ArithRef(AppNode(_AstVar("fpToReal"), (a._ast,)), RealSort(), a._vars)
 
 
-def fpToSBV(
-    rm: FPRMRef, a: FPRef, sort: BitVecSortRef, ctx: Context | None = None
-) -> BitVecRef:
+def fpToSBV(rm: FPRMRef, a: FPRef, sort: BitVecSortRef, ctx: Context | None = None) -> BitVecRef:
     return BitVecRef(
         AppNode(_AstVar("fpToSBV"), (rm._ast, a._ast)), sort, _merge(rm._vars, a._vars)
     )
 
 
-def fpToUBV(
-    rm: FPRMRef, a: FPRef, sort: BitVecSortRef, ctx: Context | None = None
-) -> BitVecRef:
+def fpToUBV(rm: FPRMRef, a: FPRef, sort: BitVecSortRef, ctx: Context | None = None) -> BitVecRef:
     return BitVecRef(
         AppNode(_AstVar("fpToUBV"), (rm._ast, a._ast)), sort, _merge(rm._vars, a._vars)
     )
 
 
-def fpToFP(
-    rm: Any, a: Any, sort: FPSortRef | None = None, ctx: Context | None = None
-) -> FPRef:
+def fpToFP(rm: Any, a: Any, sort: FPSortRef | None = None, ctx: Context | None = None) -> FPRef:
     if sort is None:
         sort = Float64()
     merged: frozenset[tuple[str, ASTSort]] = frozenset()
@@ -3542,17 +3487,11 @@ def fpBVToFP(a: BitVecRef, sort: FPSortRef, ctx: Context | None = None) -> FPRef
     return FPRef(AppNode(_AstVar("fpBVToFP"), (a._ast,)), sort, a._vars)
 
 
-def fpFPToFP(
-    rm: FPRMRef, a: FPRef, sort: FPSortRef, ctx: Context | None = None
-) -> FPRef:
-    return FPRef(
-        AppNode(_AstVar("fpFPToFP"), (rm._ast, a._ast)), sort, _merge(rm._vars, a._vars)
-    )
+def fpFPToFP(rm: FPRMRef, a: FPRef, sort: FPSortRef, ctx: Context | None = None) -> FPRef:
+    return FPRef(AppNode(_AstVar("fpFPToFP"), (rm._ast, a._ast)), sort, _merge(rm._vars, a._vars))
 
 
-def fpRealToFP(
-    rm: FPRMRef, a: ArithRef, sort: FPSortRef, ctx: Context | None = None
-) -> FPRef:
+def fpRealToFP(rm: FPRMRef, a: ArithRef, sort: FPSortRef, ctx: Context | None = None) -> FPRef:
     return FPRef(
         AppNode(_AstVar("fpRealToFP"), (rm._ast, a._ast)),
         sort,
@@ -3560,9 +3499,7 @@ def fpRealToFP(
     )
 
 
-def fpSignedToFP(
-    rm: FPRMRef, a: ExprRef, sort: FPSortRef, ctx: Context | None = None
-) -> FPRef:
+def fpSignedToFP(rm: FPRMRef, a: ExprRef, sort: FPSortRef, ctx: Context | None = None) -> FPRef:
     return FPRef(
         AppNode(_AstVar("fpSignedToFP"), (rm._ast, a._ast)),
         sort,
@@ -3570,9 +3507,7 @@ def fpSignedToFP(
     )
 
 
-def fpUnsignedToFP(
-    rm: FPRMRef, a: ExprRef, sort: FPSortRef, ctx: Context | None = None
-) -> FPRef:
+def fpUnsignedToFP(rm: FPRMRef, a: ExprRef, sort: FPSortRef, ctx: Context | None = None) -> FPRef:
     return FPRef(
         AppNode(_AstVar("fpUnsignedToFP"), (rm._ast, a._ast)),
         sort,
@@ -3614,24 +3549,18 @@ def fpZero(sort: FPSortRef, negative: bool) -> FPNumRef:
     return fpPlusZero(sort)
 
 
-def fpFP(
-    sgn: BitVecRef, exp: BitVecRef, sig: BitVecRef, ctx: Context | None = None
-) -> FPRef:
+def fpFP(sgn: BitVecRef, exp: BitVecRef, sig: BitVecRef, ctx: Context | None = None) -> FPRef:
     """Construct FP from sign/exponent/significand BitVecs."""
     exp_sort = exp._sort
     sig_sort = sig._sort
     ebits = exp_sort._width if isinstance(exp_sort, BitVecSortRef) else 11
     sbits = (sig_sort._width if isinstance(sig_sort, BitVecSortRef) else 52) + 1
     sort = FPSort(ebits, sbits)
-    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(
-        sgn._vars, exp._vars, sig._vars
-    )
+    merged: frozenset[tuple[str, ASTSort]] = frozenset().union(sgn._vars, exp._vars, sig._vars)
     return FPRef(AppNode(_AstVar("fpFP"), (sgn._ast, exp._ast, sig._ast)), sort, merged)
 
 
-def fpToFPUnsigned(
-    rm: FPRMRef, a: ExprRef, sort: FPSortRef, ctx: Context | None = None
-) -> FPRef:
+def fpToFPUnsigned(rm: FPRMRef, a: ExprRef, sort: FPSortRef, ctx: Context | None = None) -> FPRef:
     """Alias for fpUnsignedToFP."""
     return fpUnsignedToFP(rm, a, sort, ctx)
 
@@ -3810,9 +3739,7 @@ def FiniteSetMap(f: FuncDeclRef, s: ArrayRef) -> ArrayRef:
     exists_body = Exists([x], body)
     lam = Lambda(i, exists_body)
     result_sort = SetSort(f._range)
-    return ArrayRef(
-        lam._ast, result_sort, _merge(s._vars, frozenset([(f._name, f._ast_sort)]))
-    )
+    return ArrayRef(lam._ast, result_sort, _merge(s._vars, frozenset([(f._name, f._ast_sort)])))
 
 
 def FiniteSetFilter(f: FuncDeclRef, s: ArrayRef) -> ArrayRef:
@@ -3824,14 +3751,10 @@ def FiniteSetFilter(f: FuncDeclRef, s: ArrayRef) -> ArrayRef:
     i = Const("__fsf_i", dom)
     mem = BoolRef(SelectNode(s._ast, i._ast), _merge(s._vars, i._vars))
     pred = f(i)
-    pred_bool = (
-        BoolRef(pred._ast, pred._vars) if not isinstance(pred, BoolRef) else pred
-    )
+    pred_bool = BoolRef(pred._ast, pred._vars) if not isinstance(pred, BoolRef) else pred
     body = And(mem, pred_bool)
     lam = Lambda(i, body)
-    return ArrayRef(
-        lam._ast, sort, _merge(s._vars, frozenset([(f._name, f._ast_sort)]))
-    )
+    return ArrayRef(lam._ast, sort, _merge(s._vars, frozenset([(f._name, f._ast_sort)])))
 
 
 def FiniteSetRange(f: Any, lo: Any, hi: Any) -> ArrayRef:
@@ -3844,9 +3767,7 @@ def is_finite_set(a: object) -> bool:
     if not isinstance(a, ExprRef):
         return False
     sort = a._sort
-    return isinstance(sort, ArraySortRef) and isinstance(
-        sort.range()._ast_sort, PropSort
-    )
+    return isinstance(sort, ArraySortRef) and isinstance(sort.range()._ast_sort, PropSort)
 
 
 def is_finite_set_sort(s: object) -> bool:
@@ -3915,9 +3836,7 @@ def CharFromBv(bv: BitVecRef, ctx: Context | None = None) -> CharRef:
 
 
 def CharToBv(ch: ExprRef, ctx: Context | None = None) -> BitVecRef:
-    return BitVecRef(
-        CharToNatNode(ch._ast), BitVecSort(21), ch._vars
-    )
+    return BitVecRef(CharToNatNode(ch._ast), BitVecSort(21), ch._vars)
 
 
 def CharToInt(ch: ExprRef, ctx: Context | None = None) -> ArithRef:
@@ -3984,7 +3903,7 @@ class SeqRef(ExprRef):
             _merge(self._vars, idx._vars),
         )
 
-    def at(self, idx: ArithRef | int) -> SeqRef:
+    def at(self, idx: ArithRef | int) -> ExprRef:
         """Return a unit sequence at the given index."""
         elem = self[idx]
         return Unit(elem)
@@ -4089,9 +4008,7 @@ class _FiniteDomainSortRef(SortRef):
         return self._size
 
 
-def FiniteDomainSort(
-    name: str, sz: int, ctx: Context | None = None
-) -> _FiniteDomainSortRef:
+def FiniteDomainSort(name: str, sz: int, ctx: Context | None = None) -> _FiniteDomainSortRef:
     return _FiniteDomainSortRef(name, sz)
 
 
@@ -4211,11 +4128,7 @@ def is_K(a: object) -> bool:
 
 
 def is_map(a: object) -> bool:
-    return (
-        isinstance(a, ExprRef)
-        and isinstance(a._ast, LambdaNode)
-        and isinstance(a, ArrayRef)
-    )
+    return isinstance(a, ExprRef) and isinstance(a._ast, LambdaNode) and isinstance(a, ArrayRef)
 
 
 def is_select(a: object) -> bool:
@@ -4268,10 +4181,7 @@ def is_fp_sort(s: object) -> bool:
 def is_fprm_sort(s: object) -> bool:
     """True if s is a rounding mode sort."""
     if isinstance(s, SortRef):
-        return (
-            isinstance(s._ast_sort, UninterpASTSort)
-            and s._ast_sort.name == "RoundingMode"
-        )
+        return isinstance(s._ast_sort, UninterpASTSort) and s._ast_sort.name == "RoundingMode"
     return False
 
 
@@ -4529,9 +4439,7 @@ def substitute_funs(expr: ExprRef, *args: tuple[FuncDeclRef, ExprRef]) -> ExprRe
 
 def deserialize(s: str) -> ExprRef:
     """Deserialize an expression from string."""
-    raise NotImplementedError(
-        "deserialize is not supported: Lean uses its own expression format"
-    )
+    raise NotImplementedError("deserialize is not supported: Lean uses its own expression format")
 
 
 def to_symbol(s: Any, ctx: Context | None = None) -> str:
@@ -4581,23 +4489,17 @@ class Numeral:
 
     def __add__(self, other: Any) -> Numeral:
         return Numeral(
-            self._expr + other._expr
-            if isinstance(other, Numeral)
-            else self._expr + other
+            self._expr + other._expr if isinstance(other, Numeral) else self._expr + other
         )
 
     def __sub__(self, other: Any) -> Numeral:
         return Numeral(
-            self._expr - other._expr
-            if isinstance(other, Numeral)
-            else self._expr - other
+            self._expr - other._expr if isinstance(other, Numeral) else self._expr - other
         )
 
     def __mul__(self, other: Any) -> Numeral:
         return Numeral(
-            self._expr * other._expr
-            if isinstance(other, Numeral)
-            else self._expr * other
+            self._expr * other._expr if isinstance(other, Numeral) else self._expr * other
         )
 
     def __lt__(self, other: Any) -> bool:

@@ -5,7 +5,6 @@ import pytest
 from lean_py import LeanInductiveValue
 from lean_py.marshal import _CtorMeta
 
-
 # ============================================================================
 # isinstance checks
 # ============================================================================
@@ -93,18 +92,26 @@ def test_match_recursive(example_lib):
         pass
 
     NameNs = _NameNs()
-    NameNs.str = _CtorMeta("str", (), {
-        '_ctor_name': 'str',
-        '_type_name': 'Name',
-        '_tag': 1,
-        '__match_args__': ('_0', '_1'),
-    })
-    NameNs.anonymous = _CtorMeta("anonymous", (), {
-        '_ctor_name': 'anonymous',
-        '_type_name': 'Name',
-        '_tag': 0,
-        '__match_args__': (),
-    })
+    NameNs.str = _CtorMeta(
+        "str",
+        (),
+        {
+            "_ctor_name": "str",
+            "_type_name": "Name",
+            "_tag": 1,
+            "__match_args__": ("_0", "_1"),
+        },
+    )
+    NameNs.anonymous = _CtorMeta(
+        "anonymous",
+        (),
+        {
+            "_ctor_name": "anonymous",
+            "_type_name": "Name",
+            "_tag": 0,
+            "__match_args__": (),
+        },
+    )
 
     match name:
         case NameNs.str(parent, leaf):

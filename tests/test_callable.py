@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-from lean_py.exceptions import LeanError, LeanPyCallbackError
-
 
 def test_callable_basic_sum(example_lib):
     """A Lean closure that sums its arguments behaves as a Python callable."""

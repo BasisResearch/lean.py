@@ -17,133 +17,395 @@ import pytest
 
 from lean_py.kernel import Kernel
 from lean_py.z3 import (
-    # Sorts
-    BoolSort, IntSort, NatSort, RealSort, DeclareSort,
-    BitVecSort, ArraySort, StringSort,
-    SortRef, BoolSortRef, ArithSortRef, BitVecSortRef, ArraySortRef,
-    StringSortRef, ReSort,
-    # Expressions
-    ExprRef, BoolRef, ArithRef, BitVecRef, ArrayRef,
-    QuantifierRef, StringRef, ReRef,
-    # Numeric references
-    IntNumRef, RatNumRef, BitVecNumRef,
-    # Functions
-    FuncDeclRef, Function,
-    # Variable constructors
-    Int, Ints, Nat, Real, Reals, Bool, Bools,
-    BitVec, BitVecs, Array, Const, Consts,
-    # Vector constructors
-    IntVector, BoolVector, RealVector,
-    # Value constructors
-    IntVal, NatVal, RealVal, BoolVal, BitVecVal, StringVal,
-    # String constructors
-    String, Strings,
-    # Array operations
-    Select, Store, K, Map, AsArray,
-    # Datatype
-    Datatype, CreateDatatypes, EnumSort, TupleSort,
-    # Operations
-    And, Or, Not, Implies, Xor, If, Distinct,
-    # Quantifiers
-    ForAll, Exists,
-    # Substitute
-    substitute,
-    # BV functions
-    LShR, ULE, ULT, UGE, UGT, UDiv, URem,
-    Extract, Concat, ZeroExt, SignExt, BV2Int, Int2BV,
-    RotateLeft, RotateRight, SDiv, SRem, AShr,
-    # BV extras
-    RepeatBitVec, BVRedAnd, BVRedOr,
-    BvNand, BvNor, BvXnor,
-    BVAddNoOverflow, BVAddNoUnderflow,
-    BVSubNoOverflow, BVSubNoUnderflow,
-    BVMulNoOverflow, BVMulNoUnderflow,
-    BVSDivNoOverflow,
+    FP,
+    RNA,
+    RNE,
+    RTN,
+    RTP,
+    RTZ,
+    UGE,
+    UGT,
+    ULE,
+    ULT,
     # Arith functions
-    Abs, ToReal, ToInt, Sum, Product,
-    IsInt, Sqrt,
-    # Rational
-    RatVal, Q,
+    Abs,
+    AllChar,
+    # Operations
+    And,
+    AndThen,
+    ApplyResult,
+    ArithRef,
+    Array,
+    ArrayRef,
+    ArraySort,
+    ArraySortRef,
+    AsArray,
+    AShr,
+    AstMap,
+    AstRef,
+    AstVector,
+    At,
+    AtLeast,
     # Pseudo-boolean
-    AtMost, AtLeast, PbEq, PbLe, PbGe,
+    AtMost,
+    BitVec,
+    BitVecNumRef,
+    BitVecRef,
+    BitVecs,
+    BitVecSort,
+    BitVecVal,
+    Bool,
+    BoolRef,
+    Bools,
+    # Sorts
+    BoolSort,
+    BoolSortRef,
+    BoolVal,
+    BoolVector,
+    BV2Int,
+    BVAddNoOverflow,
+    BVAddNoUnderflow,
+    BVMulNoOverflow,
+    BVMulNoUnderflow,
+    BvNand,
+    BvNor,
+    BVRedAnd,
+    BVRedOr,
+    BVSDivNoOverflow,
+    BVSubNoOverflow,
+    BVSubNoUnderflow,
+    BvXnor,
+    CharFromBv,
+    CharIsDigit,
+    CharSort,
+    CharToBv,
+    CharToInt,
+    CharVal,
+    Complement,
+    Concat,
+    Const,
+    Consts,
+    Contains,
+    # Stubs — Context / AstVector / AstMap
+    Context,
+    CreateDatatypes,
+    # Datatype
+    Datatype,
+    DeclareSort,
+    Diff,
+    DisjointSum,
+    Distinct,
+    Empty,
+    EmptySet,
+    EnumSort,
+    Exists,
+    # Expressions
+    ExprRef,
+    Extract,
+    FailIf,
+    FiniteDomainSize,
+    FiniteDomainSort,
+    FiniteDomainVal,
+    # Stubs — Fixedpoint / RecFunction
+    Fixedpoint,
+    Float16,
+    Float32,
+    Float64,
+    Float128,
+    # Quantifiers
+    ForAll,
+    FPNumRef,
+    FPRef,
+    FPRMRef,
+    FPs,
+    FPSort,
+    # Stubs — FP
+    FPSortRef,
+    FPVal,
+    FreshBool,
     # Fresh
-    FreshConst, FreshInt, FreshBool, FreshReal,
+    FreshConst,
+    FreshInt,
+    FreshReal,
+    FullSet,
+    # Functions
+    FuncDeclRef,
+    FuncEntry,
+    # Stubs — model introspection
+    FuncInterp,
+    Function,
+    # Tactic
+    Goal,
+    If,
+    Implies,
+    IndexOf,
+    InRe,
+    # Variable constructors
+    Int,
+    Int2BV,
+    Intersect,
+    # Numeric references
+    IntNumRef,
+    Ints,
+    IntSort,
+    IntToStr,
+    # Value constructors
+    IntVal,
+    # Vector constructors
+    IntVector,
+    IsInt,
+    IsMember,
+    IsSubset,
+    K,
     # Lambda
     Lambda,
-    # String functions
-    Length, Contains, PrefixOf, SuffixOf, Replace,
-    SubString, IndexOf, StrConcat, StrToInt, IntToStr,
-    # Regex functions
-    Re, Star, Plus, Option, Union, Intersect,
-    Complement, Range, Loop, InRe, AllChar,
-    # Predicates
-    is_expr, is_true, is_false, is_int, is_real,
-    is_bool, is_bv, is_array, is_const, is_var,
-    is_quantifier, is_eq, is_distinct, is_and, is_or,
-    is_not, is_implies, is_add, is_mul, is_sub, is_div,
-    is_string, is_string_value,
-    is_arith, is_sort, is_app, is_func_decl,
-    is_int_value, is_rational_value, is_bv_value,
-    is_le, is_lt, is_ge, is_gt, is_mod, is_idiv,
-    # Solver
-    Solver, ModelRef, sat, unsat, unknown,
-    set_kernel, prove, solve, simplify,
-    set_param, set_option,
-    SolverFor, SimpleSolver, solve_using,
-    Optimize, parse_smt2_string, parse_smt2_file,
-    # Tactic
-    Goal, ApplyResult, Tactic, Then, OrElse, Repeat,
-    AndThen, With, TryFor, ParOr, ParThen, ParAndThen,
-    # Stubs — Context / AstVector / AstMap
-    Context, main_ctx, get_ctx, AstRef, AstVector, AstMap,
-    # Stubs — FP
-    FPSortRef, FPRef, FPNumRef, FPRMRef,
-    FPSort, Float16, Float32, Float64, Float128,
-    FP, FPs, FPVal,
-    fpNaN, fpPlusInfinity, fpMinusInfinity, fpPlusZero, fpMinusZero,
-    RoundNearestTiesToEven, RNE, RoundNearestTiesToAway, RNA,
-    RoundTowardPositive, RTP, RoundTowardNegative, RTN, RoundTowardZero, RTZ,
-    fpAdd, fpSub, fpMul, fpDiv, fpNeg, fpAbs, fpSqrt, fpFMA, fpRem, fpMin, fpMax,
-    fpLEQ, fpLT, fpGEQ, fpGT, fpEQ,
-    fpIsNaN, fpIsInf, fpIsZero, fpIsNormal, fpIsSubnormal, fpIsNegative, fpIsPositive,
-    fpToReal, fpToSBV, fpToUBV, fpToFP, fpBVToFP, fpFPToFP, fpRealToFP,
-    fpSignedToFP, fpUnsignedToFP,
-    # Stubs — Sets
-    SetSort, EmptySet, FullSet, IsMember, SetAdd, SetDel,
-    SetUnion, SetIntersect, SetComplement, SetDifference, IsSubset, SetHasSize,
-    # Stubs — Sequences / Char / FiniteDomain
-    SeqSort, Empty, Full, Unit,
-    CharSort, CharVal, CharFromBv, CharToBv, CharToInt, CharIsDigit,
-    FiniteDomainSort, FiniteDomainVal, FiniteDomainSize,
-    # Stubs — Fixedpoint / RecFunction
-    Fixedpoint, RecFunction, RecAddDefinition,
-    # Stubs — Var / MultiPattern / DisjointSum
-    Var, get_var_index, MultiPattern, DisjointSum,
-    # Stubs — predicates
-    is_ast, is_fp, is_fprm, is_fp_value,
-    is_seq, is_re, is_const_array, is_K, is_map, is_select, is_store,
-    is_to_real, is_to_int, is_is_int, is_pattern,
     # Stubs — string/regex extras
-    LastIndexOf, StrToCode, StrFromCode, At, Diff,
-    # Stubs — structural equality / utilities
-    eq, enable_trace, disable_trace, open_log,
-    get_version, get_version_string, get_full_version,
-    # Stubs — model introspection
-    FuncInterp, FuncEntry,
+    LastIndexOf,
+    # String functions
+    Length,
+    Loop,
+    # BV functions
+    LShR,
+    Map,
+    ModelRef,
+    MultiPattern,
+    Nat,
+    NatSort,
+    NatVal,
+    Not,
+    Optimize,
+    Option,
+    Or,
+    OrElse,
+    ParAndThen,
+    ParOr,
+    ParThen,
+    PbEq,
+    PbGe,
+    PbLe,
+    Plus,
+    PrefixOf,
+    Probe,
+    ProbeAnd,
+    ProbeOr,
+    Product,
+    Q,
+    Range,
+    RatNumRef,
+    # Rational
+    RatVal,
+    # Regex functions
+    Re,
+    Real,
+    Reals,
+    RealSort,
+    RealVal,
+    RealVector,
+    RecAddDefinition,
+    RecFunction,
+    Repeat,
+    # BV extras
+    RepeatBitVec,
+    Replace,
+    ReRef,
+    RotateLeft,
+    RotateRight,
+    RoundNearestTiesToAway,
+    RoundNearestTiesToEven,
+    RoundTowardNegative,
+    RoundTowardPositive,
+    RoundTowardZero,
+    SDiv,
+    # Array operations
+    Select,
+    # Stubs — Sequences / Char / FiniteDomain
+    SeqSort,
+    SetAdd,
+    SetComplement,
+    SetDel,
+    SetDifference,
+    SetHasSize,
+    SetIntersect,
+    # Stubs — Sets
+    SetSort,
+    SetUnion,
+    SignExt,
+    SimpleSolver,
+    # Solver
+    Solver,
+    SolverFor,
+    SortRef,
+    Sqrt,
+    SRem,
+    Star,
+    Statistics,
+    Store,
+    StrConcat,
+    StrFromCode,
+    # String constructors
+    String,
+    StringRef,
+    Strings,
+    StringSort,
+    StringSortRef,
+    StringVal,
+    StrToCode,
+    StrToInt,
+    SubString,
+    SuffixOf,
+    Sum,
+    Tactic,
+    Then,
+    ToInt,
+    ToReal,
+    TryFor,
+    TupleSort,
+    UDiv,
+    Union,
+    Unit,
     # Stubs — Update / Probe / Statistics
-    Update, Probe, ProbeAnd, ProbeOr, FailIf, Statistics,
+    Update,
+    URem,
+    # Stubs — Var / MultiPattern / DisjointSum
+    Var,
+    With,
+    Xor,
+    ZeroExt,
+    disable_trace,
+    enable_trace,
+    # Stubs — structural equality / utilities
+    eq,
+    fpAbs,
+    fpAdd,
+    fpBVToFP,
+    fpDiv,
+    fpEQ,
+    fpFMA,
+    fpFPToFP,
+    fpGEQ,
+    fpGT,
+    fpIsInf,
+    fpIsNaN,
+    fpIsNegative,
+    fpIsNormal,
+    fpIsPositive,
+    fpIsSubnormal,
+    fpIsZero,
+    fpLEQ,
+    fpLT,
+    fpMax,
+    fpMin,
+    fpMinusInfinity,
+    fpMinusZero,
+    fpMul,
+    fpNaN,
+    fpNeg,
+    fpPlusInfinity,
+    fpPlusZero,
+    fpRealToFP,
+    fpRem,
+    fpSignedToFP,
+    fpSqrt,
+    fpSub,
+    fpToFP,
+    fpToReal,
+    fpToSBV,
+    fpToUBV,
+    fpUnsignedToFP,
+    get_ctx,
+    get_full_version,
+    get_var_index,
+    get_version,
+    get_version_string,
+    is_add,
+    is_and,
+    is_app,
+    is_arith,
+    is_array,
+    # Stubs — predicates
+    is_ast,
+    is_bool,
+    is_bv,
+    is_bv_value,
+    is_const,
+    is_const_array,
+    is_distinct,
+    is_div,
+    is_eq,
+    # Predicates
+    is_expr,
+    is_false,
+    is_fp,
+    is_fp_value,
+    is_fprm,
+    is_func_decl,
+    is_ge,
+    is_gt,
+    is_idiv,
+    is_implies,
+    is_int,
+    is_int_value,
+    is_K,
+    is_le,
+    is_lt,
+    is_mod,
+    is_mul,
+    is_not,
+    is_or,
+    is_pattern,
+    is_quantifier,
+    is_rational_value,
+    is_re,
+    is_real,
+    is_select,
+    is_seq,
+    is_sort,
+    is_store,
+    is_string,
+    is_string_value,
+    is_sub,
+    is_to_int,
+    is_to_real,
+    is_true,
+    is_var,
+    main_ctx,
+    open_log,
+    parse_smt2_file,
+    parse_smt2_string,
+    prove,
+    sat,
+    set_kernel,
+    set_option,
+    set_param,
+    simplify,
+    solve,
+    solve_using,
+    # Substitute
+    substitute,
+    unknown,
+    unsat,
 )
 from lean_py.z3._ast import (
-    BinOp, BinOpNode, UnOp, UnOpNode,
-    BoolLit, IntLit, NatLit, BvLit, Var as AstVar,
-    ForAllNode, ExistsNode, DistinctNode, IteNode,
-    SelectNode, StoreNode, ConstArrayNode, LambdaNode,
-    ToRealNode, ToIntNode, ExtractNode, ZeroExtNode, SignExtNode,
-    StringLit, StrConcatNode, StrLenNode, StrContainsNode,
-    ReStarNode, InReNode,
-    PropSort, IntASTSort, StringASTSort,
+    BinOp,
+    BinOpNode,
+    BoolLit,
+    BvLit,
+    DistinctNode,
+    ExistsNode,
+    ForAllNode,
+    InReNode,
+    IntLit,
+    IteNode,
+    LambdaNode,
+    NatLit,
+    ReStarNode,
+    SelectNode,
+    StrConcatNode,
+    StrContainsNode,
+    StringLit,
+    ToRealNode,
+    UnOpNode,
 )
-from lean_py.z3.solver import _try_prove
 
 
 @pytest.fixture(scope="module")
@@ -863,7 +1125,9 @@ class TestDogCatMouse:
         """No solution with impossible extra constraint."""
         dog, cat, mouse = Ints("dog cat mouse")
         constraints = [
-            dog >= 1, cat >= 1, mouse >= 1,
+            dog >= 1,
+            cat >= 1,
+            mouse >= 1,
             dog + cat + mouse == 100,
             dog * 15 + cat + mouse / 4 == 100,  # integer division
             mouse < 0,  # impossible with mouse >= 1
@@ -892,7 +1156,10 @@ class TestNQueensGuide:
         """2 queens on 2x2 board: impossible."""
         q0, q1 = Ints("q0 q1")
         constraints = [
-            q0 >= 1, q0 <= 2, q1 >= 1, q1 <= 2,
+            q0 >= 1,
+            q0 <= 2,
+            q1 >= 1,
+            q1 <= 2,
             Distinct(q0, q1),
             q0 - q1 != IntVal(1),
             q0 - q1 != IntVal(-1),
@@ -1129,8 +1396,8 @@ class TestStringTheory:
 
     def test_string_length(self):
         s = String("s")
-        l = Length(s)
-        assert is_int(l)
+        length = Length(s)
+        assert is_int(length)
 
     def test_contains(self):
         s = String("s")
@@ -1481,7 +1748,7 @@ class TestOperatorOverloading:
         assert isinstance((x * y)._ast, BinOpNode)
         assert isinstance((x / y)._ast, BinOpNode)
         assert isinstance((x % y)._ast, BinOpNode)
-        assert isinstance((x ** y)._ast, BinOpNode)
+        assert isinstance((x**y)._ast, BinOpNode)
         assert isinstance((-x)._ast, UnOpNode)
         assert (+x) is x
 
@@ -1493,7 +1760,7 @@ class TestOperatorOverloading:
         assert isinstance((2 * x)._ast, BinOpNode)
         assert isinstance((10 / x)._ast, BinOpNode)
         assert isinstance((10 % x)._ast, BinOpNode)
-        assert isinstance((2 ** x)._ast, BinOpNode)
+        assert isinstance((2**x)._ast, BinOpNode)
 
     def test_comparison_operators(self):
         x = Int("x")
@@ -2838,7 +3105,6 @@ class TestQuantifierRefIntrospection:
 
     def test_var_sort(self):
         x = Int("x")
-        y = Real("y")
         q = ForAll([x], x > 0)
         assert q.var_sort(0) == IntSort()
 
@@ -2929,6 +3195,7 @@ class TestRatNumRef:
 
     def test_as_fraction(self):
         from fractions import Fraction
+
         r = RatVal(1, 3)
         f = r.as_fraction()
         assert f == Fraction(1, 3)
@@ -3182,11 +3449,8 @@ class TestOptimize:
 
 
 class TestParseSmt2String:
-
     def test_basic_assertions(self):
-        result = parse_smt2_string(
-            "(declare-const x Int) (assert (> x 0)) (assert (< x 10))"
-        )
+        result = parse_smt2_string("(declare-const x Int) (assert (> x 0)) (assert (< x 10))")
         assert len(result) == 2
 
     def test_with_decls(self):
@@ -3207,28 +3471,22 @@ class TestParseSmt2String:
 
     def test_boolean_ops(self):
         result = parse_smt2_string(
-            "(declare-const p Bool) (declare-const q Bool)"
-            " (assert (and p (or q (not p))))"
+            "(declare-const p Bool) (declare-const q Bool) (assert (and p (or q (not p))))"
         )
         assert len(result) == 1
 
     def test_let_binding(self):
-        result = parse_smt2_string(
-            "(declare-const x Int) (assert (let ((y (+ x 1))) (> y 0)))"
-        )
+        result = parse_smt2_string("(declare-const x Int) (assert (let ((y (+ x 1))) (> y 0)))")
         assert len(result) == 1
 
     def test_bitvec(self):
         result = parse_smt2_string(
-            "(declare-const x (_ BitVec 8))"
-            " (assert (= (bvadd x #x01) #b00000010))"
+            "(declare-const x (_ BitVec 8)) (assert (= (bvadd x #x01) #b00000010))"
         )
         assert len(result) == 1
 
     def test_quantifier(self):
-        result = parse_smt2_string(
-            "(assert (forall ((x Int)) (>= (* x x) 0)))"
-        )
+        result = parse_smt2_string("(assert (forall ((x Int)) (>= (* x x) 0)))")
         assert len(result) == 1
 
     def test_empty(self):
@@ -3237,38 +3495,29 @@ class TestParseSmt2String:
 
     def test_comments(self):
         result = parse_smt2_string(
-            "; this is a comment\n"
-            "(declare-const x Int)\n"
-            "; another comment\n"
-            "(assert (> x 0))"
+            "; this is a comment\n(declare-const x Int)\n; another comment\n(assert (> x 0))"
         )
         assert len(result) == 1
 
     def test_declare_fun(self):
         result = parse_smt2_string(
-            "(declare-fun f (Int Int) Int)"
-            " (declare-const x Int)"
-            " (assert (> (f x x) 0))"
+            "(declare-fun f (Int Int) Int) (declare-const x Int) (assert (> (f x x) 0))"
         )
         assert len(result) == 1
 
     def test_ite(self):
-        result = parse_smt2_string(
-            "(declare-const x Int) (assert (= (ite (> x 0) x (- x)) x))"
-        )
+        result = parse_smt2_string("(declare-const x Int) (assert (= (ite (> x 0) x (- x)) x))")
         assert len(result) == 1
 
     def test_implies(self):
         result = parse_smt2_string(
-            "(declare-const p Bool) (declare-const q Bool)"
-            " (assert (=> p q))"
+            "(declare-const p Bool) (declare-const q Bool) (assert (=> p q))"
         )
         assert len(result) == 1
 
     def test_distinct(self):
         result = parse_smt2_string(
-            "(declare-const x Int) (declare-const y Int)"
-            " (assert (distinct x y))"
+            "(declare-const x Int) (declare-const y Int) (assert (distinct x y))"
         )
         assert len(result) == 1
 

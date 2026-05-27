@@ -9,9 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pycparser
-from pycparser.c_parser import ParseError
 import pycparser.c_ast as c_ast
-
+from pycparser.c_parser import ParseError
 
 # ============================================================================
 # Data model
@@ -90,13 +89,7 @@ def find_lean_header() -> Path:
         toolchain = toolchain_file.read_text().strip()
         toolchain_dir = toolchain.replace("/", "--").replace(":", "---")
         header = (
-            Path.home()
-            / ".elan"
-            / "toolchains"
-            / toolchain_dir
-            / "include"
-            / "lean"
-            / "lean.h"
+            Path.home() / ".elan" / "toolchains" / toolchain_dir / "include" / "lean" / "lean.h"
         )
         if header.exists():
             return header
@@ -235,9 +228,7 @@ def _extract_struct(node: c_ast.Struct) -> StructDef | None:
         bitfield = None
         if decl.bitsize and isinstance(decl.bitsize, c_ast.Constant):
             bitfield = int(decl.bitsize.value)
-        fields.append(
-            StructField(name=fname, c_type=ftype, is_pointer=is_ptr, bitfield=bitfield)
-        )
+        fields.append(StructField(name=fname, c_type=ftype, is_pointer=is_ptr, bitfield=bitfield))
     return StructDef(name=node.name or "", fields=fields)
 
 
@@ -272,9 +263,7 @@ def _extract_export_names(header_path: Path) -> set[str]:
 
 def _extract_inline_names(header_path: Path) -> set[str]:
     text = header_path.read_text()
-    pattern = re.compile(
-        r"static\s+inline\s+(?:LEAN_ALWAYS_INLINE\s+)?[\w\s*]+\s+(\w+)\s*\("
-    )
+    pattern = re.compile(r"static\s+inline\s+(?:LEAN_ALWAYS_INLINE\s+)?[\w\s*]+\s+(\w+)\s*\(")
     return {m.group(1) for m in pattern.finditer(text)}
 
 
@@ -283,9 +272,7 @@ def _extract_inline_names(header_path: Path) -> set[str]:
 # ============================================================================
 
 
-def _classify(
-    ast: c_ast.FileAST, defines: dict[str, int], header_path: Path
-) -> HeaderModel:
+def _classify(ast: c_ast.FileAST, defines: dict[str, int], header_path: Path) -> HeaderModel:
     model = HeaderModel()
     model.constants = defines
 
@@ -294,18 +281,14 @@ def _classify(
 
     for node in ast.ext:
         if isinstance(node, c_ast.Typedef):
-            if isinstance(node.type, c_ast.TypeDecl) and isinstance(
-                node.type.type, c_ast.Struct
-            ):
+            if isinstance(node.type, c_ast.TypeDecl) and isinstance(node.type.type, c_ast.Struct):
                 struct = _extract_struct(node.type.type)
                 if struct:
                     struct.name = node.name
                     model.structs.append(struct)
                     continue
             typedef_type = _decl_type_to_str(node.type)
-            model.typedefs.append(
-                TypedefDef(name=node.name, underlying_type=typedef_type)
-            )
+            model.typedefs.append(TypedefDef(name=node.name, underlying_type=typedef_type))
 
         elif isinstance(node, c_ast.Decl):
             if isinstance(node.type, c_ast.FuncDecl):

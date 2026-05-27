@@ -4,6 +4,7 @@ Verify that ``Py.ofLeanObj`` / ``Py.toLeanObj`` and the C-level
 ``LeanObjHandle`` type allow Lean objects (``Expr``, ``Name``, etc.)
 to pass through the ``Py`` bridge and back.
 """
+
 from __future__ import annotations
 
 import gc
@@ -11,7 +12,6 @@ import gc
 import pytest
 
 from lean_py.marshal import LeanObj
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

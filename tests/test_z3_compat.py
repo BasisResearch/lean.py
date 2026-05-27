@@ -10,57 +10,79 @@ import pytest
 
 from lean_py.kernel import Kernel
 from lean_py.z3 import (
+    RNE,
+    UGE,
+    UGT,
+    ULE,
+    ULT,
     Abs,
     AllChar,
     And,
+    ApplyResult,
     Array,
+    ArrayRef,
     ArraySort,
-    AShr,
     AsArray,
-    BV2Int,
+    AShr,
     BitVec,
     BitVecRef,
+    BitVecs,
     BitVecSort,
     BitVecVal,
-    BitVecs,
     Bool,
     BoolSort,
     BoolVal,
+    BV2Int,
+    BVAddNoOverflow,
+    BVMulNoOverflow,
+    CharIsDigit,
+    CharRef,
+    CharSort,
+    CharSortRef,
+    CharToBv,
+    CharToInt,
+    CharVal,
     Complement,
     Concat,
     Const,
-    Consts,
     Contains,
     Datatype,
     DeclareSort,
     Distinct,
+    Empty,
+    EmptySet,
     Exists,
     ExprRef,
     Extract,
+    Float64,
     ForAll,
+    FPNumRef,
+    FPVal,
     FreshBool,
     FreshConst,
     FreshInt,
     FreshReal,
+    FullSet,
     Function,
     Goal,
-    ApplyResult,
     If,
     Implies,
-    InRe,
     IndexOf,
-    Intersect,
+    InRe,
     Int,
     Int2BV,
+    Intersect,
+    Ints,
     IntSort,
     IntToStr,
     IntVal,
-    Ints,
+    IsMember,
+    IsSubset,
     K,
-    LShR,
     Lambda,
     Length,
     Loop,
+    LShR,
     Map,
     ModelRef,
     Nat,
@@ -69,6 +91,7 @@ from lean_py.z3 import (
     Not,
     Option,
     Or,
+    OrElse,
     Plus,
     PrefixOf,
     Product,
@@ -78,42 +101,56 @@ from lean_py.z3 import (
     Re,
     Real,
     RealSort,
+    Repeat,
     Replace,
     RotateLeft,
     RotateRight,
     SDiv,
-    SRem,
     Select,
+    SeqRef,
+    SeqSort,
+    SeqSortRef,
+    SetAdd,
+    SetComplement,
+    SetDifference,
+    SetIntersect,
+    SetSort,
+    SetUnion,
     SignExt,
     Solver,
+    SRem,
     Star,
     Store,
     StrConcat,
-    StrToInt,
     String,
     StringRef,
+    Strings,
     StringSort,
     StringSortRef,
     StringVal,
-    Strings,
+    StrToInt,
     SubString,
     SuffixOf,
     Sum,
     Tactic,
     Then,
-    OrElse,
-    Repeat,
     ToInt,
     ToReal,
     UDiv,
-    UGE,
-    UGT,
-    ULE,
-    ULT,
-    URem,
     Union,
+    Unit,
+    URem,
     Xor,
     ZeroExt,
+    fpAdd,
+    fpEQ,
+    fpIsNegative,
+    fpIsPositive,
+    fpLT,
+    fpMul,
+    fpNaN,
+    fpNeg,
+    fpPlusInfinity,
     is_add,
     is_and,
     is_array,
@@ -142,49 +179,6 @@ from lean_py.z3 import (
     simplify,
     unknown,
     unsat,
-    Float64,
-    FPVal,
-    FPNumRef,
-    FPRef,
-    fpAdd,
-    fpMul,
-    fpNeg,
-    fpLT,
-    fpEQ,
-    fpNaN,
-    fpPlusInfinity,
-    RNE,
-    RealVal,
-    Reals,
-    BVAddNoOverflow,
-    BVMulNoOverflow,
-    fpIsPositive,
-    fpIsNegative,
-    CharSort,
-    CharSortRef,
-    CharVal,
-    CharRef,
-    CharFromBv,
-    CharToBv,
-    CharToInt,
-    CharIsDigit,
-    SeqSort,
-    SeqSortRef,
-    SeqRef,
-    Empty,
-    Unit,
-    SetSort,
-    EmptySet,
-    FullSet,
-    SetAdd,
-    SetDel,
-    IsMember,
-    SetUnion,
-    SetIntersect,
-    SetComplement,
-    SetDifference,
-    IsSubset,
-    ArrayRef,
 )
 from lean_py.z3._ast import (
     BinOp,
@@ -197,29 +191,26 @@ from lean_py.z3._ast import (
     ExtractNode,
     ForAllNode,
     FpLitNode,
+    InductiveCtorNode,
     InReNode,
-    IntASTSort,
     IntLit,
     IteNode,
     LambdaNode,
     NatLit,
-    PropSort,
     ReStarNode,
     SelectNode,
     SignExtNode,
     StoreNode,
     StrConcatNode,
     StrContainsNode,
-    StrLenNode,
-    StringASTSort,
     StringLit,
-    ToRealNode,
+    StrLenNode,
     ToIntNode,
+    ToRealNode,
     UnOp,
     UnOpNode,
     Var,
     ZeroExtNode,
-    InductiveCtorNode,
 )
 from lean_py.z3.solver import _try_prove
 
@@ -229,10 +220,15 @@ def kernel(example_lib) -> Kernel:
     k = Kernel(example_lib)
     import subprocess
     from pathlib import Path
-    sp = subprocess.check_output(
-        ["lake", "env", "printenv", "LEAN_PATH"],
-        cwd=str(Path(__file__).parent / "lean"),
-    ).decode().strip()
+
+    sp = (
+        subprocess.check_output(
+            ["lake", "env", "printenv", "LEAN_PATH"],
+            cwd=str(Path(__file__).parent / "lean"),
+        )
+        .decode()
+        .strip()
+    )
     k.init_search(sp)
     k.load(["Init", "LeanPy.Z3"])
     set_kernel(k)
@@ -663,21 +659,36 @@ class TestDatatype:
         p = Pair.mk(x, y)
         assert isinstance(p._ast, InductiveCtorNode)
 
+    def test_uninterpreted_sort_field(self, kernel):
+        """Datatype with a DeclareSort field should not fail (issue #9)."""
+        HeapRef = DeclareSort("HeapRef")
+        dt = Datatype("optional_HeapRef_")
+        dt.declare("missing")
+        dt.declare("present", ("valueat", HeapRef))
+        result = dt.create()
+        assert hasattr(result, "missing")
+        assert hasattr(result, "present")
+        assert hasattr(result, "valueat")
+
 
 class TestDatatypeStructural:
     """Test that inductive datatypes enable structural proofs."""
 
     def test_enum_disjointness(self, kernel):
-        Color = Datatype('Color_s1')
-        Color.declare('red'); Color.declare('green'); Color.declare('blue')
+        Color = Datatype("Color_s1")
+        Color.declare("red")
+        Color.declare("green")
+        Color.declare("blue")
         Color = Color.create()
         assert _try_prove(Color.red != Color.green)
 
     def test_enum_exhaustiveness(self, kernel):
-        Color = Datatype('Color_s2')
-        Color.declare('red'); Color.declare('green'); Color.declare('blue')
+        Color = Datatype("Color_s2")
+        Color.declare("red")
+        Color.declare("green")
+        Color.declare("blue")
         Color = Color.create()
-        x = Const('x', Color)
+        x = Const("x", Color)
         g = Goal()
         g.add(Or(x == Color.red, x == Color.green, x == Color.blue))
         t = Tactic("intro x; cases x <;> simp")
@@ -685,33 +696,50 @@ class TestDatatypeStructural:
         assert len(r) == 0
 
     def test_constructor_injectivity(self, kernel):
-        Pair = Datatype('IntPair_s3')
-        Pair.declare('mk_pair', ('fst', IntSort()), ('snd', IntSort()))
+        Pair = Datatype("IntPair_s3")
+        Pair.declare("mk_pair", ("fst", IntSort()), ("snd", IntSort()))
         Pair = Pair.create()
-        x, y = Ints('x y')
-        assert _try_prove(Implies(Pair.mk_pair(x, y) == Pair.mk_pair(IntVal(1), IntVal(2)), And(x == IntVal(1), y == IntVal(2))))
+        x, y = Ints("x y")
+        assert _try_prove(
+            Implies(
+                Pair.mk_pair(x, y) == Pair.mk_pair(IntVal(1), IntVal(2)),
+                And(x == IntVal(1), y == IntVal(2)),
+            )
+        )
 
     def test_accessor_projection(self, kernel):
-        Pair = Datatype('IntPair_s4')
-        Pair.declare('mk', ('fst', IntSort()), ('snd', IntSort()))
+        Pair = Datatype("IntPair_s4")
+        Pair.declare("mk", ("fst", IntSort()), ("snd", IntSort()))
         Pair = Pair.create()
         assert _try_prove(Pair.fst(Pair.mk(IntVal(1), IntVal(2))) == IntVal(1))
 
     def test_recursive_datatype(self, kernel):
-        Tree = Datatype('Tree_s5')
-        Tree.declare('leaf', ('val', IntSort()))
-        Tree.declare('node', ('left', Tree), ('right', Tree))
+        Tree = Datatype("Tree_s5")
+        Tree.declare("leaf", ("val", IntSort()))
+        Tree.declare("node", ("left", Tree), ("right", Tree))
         Tree = Tree.create()
         t1 = Tree.leaf(IntVal(1))
         t2 = Tree.node(Tree.leaf(IntVal(1)), Tree.leaf(IntVal(2)))
         assert _try_prove(t1 != t2)
 
     def test_recognizer(self, kernel):
-        Color = Datatype('Color_s6')
-        Color.declare('red'); Color.declare('green'); Color.declare('blue')
+        Color = Datatype("Color_s6")
+        Color.declare("red")
+        Color.declare("green")
+        Color.declare("blue")
         Color = Color.create()
         assert _try_prove(Color.is_red(Color.red))
         assert _try_prove(Not(Color.is_red(Color.green)))
+
+    def test_uninterp_sort_field_disjointness(self, kernel):
+        """Constructors of a datatype with DeclareSort fields are distinct (issue #9)."""
+        Ref = DeclareSort("Ref_s7")
+        Opt = Datatype("OptRef_s7")
+        Opt.declare("none_")
+        Opt.declare("some_", ("val", Ref))
+        Opt = Opt.create()
+        x = Const("x", Ref)
+        assert _try_prove(Opt.none_ != Opt.some_(x))
 
 
 # ------------------------------------------------------------------
@@ -723,7 +751,7 @@ class TestBugFixes:
     def test_pow_not_mul(self):
         """__pow__ should use POW, not MUL."""
         x = Int("x")
-        p = x ** 2
+        p = x**2
         assert isinstance(p._ast, BinOpNode) and p._ast.op == BinOp.POW
 
     def test_bool_guard(self):
@@ -764,7 +792,7 @@ class TestMissingOperators:
 
     def test_arith_rpow(self):
         x = Int("x")
-        r = 2 ** x
+        r = 2**x
         assert isinstance(r._ast, BinOpNode) and r._ast.op == BinOp.POW
 
     def test_arith_pos(self):
@@ -1301,13 +1329,14 @@ class TestTacticGoal:
     def test_apply_result_empty_proved(self):
         r = ApplyResult([])
         assert len(r) == 0
-        from lean_py.z3.core import BoolLit as BoolLitCls
+
         assert r.as_expr()._ast == BoolLit(True)
 
     def test_tactic_solve_trivial(self, kernel):
         """Tactic('decide') can solve True."""
         g = Goal()
         from lean_py.z3 import BoolVal
+
         g.add(BoolVal(True))
         t = Tactic("decide")
         result = t.apply(g)
@@ -1359,9 +1388,9 @@ class TestStringSort:
 
     def test_length(self):
         s = String("s")
-        l = Length(s)
-        assert is_int(l)
-        assert isinstance(l._ast, StrLenNode)
+        length = Length(s)
+        assert is_int(length)
+        assert isinstance(length._ast, StrLenNode)
 
     def test_contains(self):
         s = String("s")
@@ -1565,6 +1594,7 @@ class TestMapAsArray:
         a = Array("a", IntSort(), IntSort())
         result = Map(f, a)
         from lean_py.z3 import ArraySortRef
+
         assert isinstance(result._sort, ArraySortRef)
 
 
@@ -1722,6 +1752,7 @@ class TestCoercionEdgeCases:
     def test_bv_negative_coercion(self):
         """BitVec + (-1) should produce two's complement."""
         from lean_py.z3._ast import BvLit
+
         bv = BitVec("x", 8)
         result = bv + (-1)
         # The -1 coerced to BvLit should be 255 (two's complement for 8-bit)
@@ -1733,6 +1764,7 @@ class TestCoercionEdgeCases:
     def test_bv_negative_coercion_16bit(self):
         """BitVec + (-1) on 16-bit should be 65535."""
         from lean_py.z3._ast import BvLit
+
         bv = BitVec("x", 16)
         result = bv + (-1)
         rhs = result._ast.rhs
@@ -1745,6 +1777,7 @@ class TestCoercionEdgeCases:
         result = x + 3.14
         # The AST should NOT have IntLit(3) — it should be a rational
         from lean_py.z3._ast import BinOpNode, IntLit
+
         assert isinstance(result._ast, BinOpNode)
         rhs = result._ast.rhs
         # rhs should NOT be IntLit(3)
@@ -1754,7 +1787,8 @@ class TestCoercionEdgeCases:
         """Real + 0.5 should be representable as 1/2."""
         x = Real("x")
         result = x + 0.5
-        from lean_py.z3._ast import BinOpNode, ToRealNode
+        from lean_py.z3._ast import BinOpNode
+
         assert isinstance(result._ast, BinOpNode)
         rhs = result._ast.rhs
         # Should be a division of ToReal nodes (rational representation)
@@ -1814,8 +1848,8 @@ class TestMixedSortProofs:
 # ------------------------------------------------------------------
 
 
-class TestBugFixes:
-    """Tests for specific bug fixes."""
+class TestBugFixesCoercion:
+    """Tests for specific bug fixes (coercion, overflow, FP)."""
 
     def test_inttostr_negative(self, kernel):
         """IntToStr(-5) should return empty string per SMT-LIB spec."""
@@ -1824,7 +1858,6 @@ class TestBugFixes:
 
     def test_bv_add_no_overflow_unsigned(self, kernel):
         """BVAddNoOverflow unsigned: 200 + 100 overflows 8-bit."""
-        from lean_py.z3 import BVAddNoOverflow
 
         a = BitVecVal(200, 8)
         b = BitVecVal(100, 8)
@@ -1834,7 +1867,6 @@ class TestBugFixes:
 
     def test_bv_mul_no_overflow_unsigned(self, kernel):
         """BVMulNoOverflow unsigned: 200 * 2 overflows 8-bit."""
-        from lean_py.z3 import BVMulNoOverflow
 
         a = BitVecVal(200, 8)
         b = BitVecVal(2, 8)
@@ -1844,14 +1876,12 @@ class TestBugFixes:
 
     def test_fp_is_positive_zero(self, kernel):
         """fpIsPositive(+0.0) should be True."""
-        from lean_py.z3 import fpIsPositive
 
         claim = fpIsPositive(FPVal(0.0, Float64()))
         assert _try_prove(claim)
 
     def test_fp_is_negative_neg_zero(self, kernel):
         """fpIsNegative(-0.0) should be True."""
-        from lean_py.z3 import fpIsNegative
 
         claim = fpIsNegative(FPVal(-0.0, Float64()))
         assert _try_prove(claim)
@@ -1867,28 +1897,24 @@ class TestChar:
 
     def test_char_sort_creation(self):
         """CharSort() creates the char sort."""
-        from lean_py.z3 import CharSort, CharSortRef
 
         s = CharSort()
         assert isinstance(s, CharSortRef)
 
     def test_char_val_from_str(self):
         """CharVal creates a char literal from string."""
-        from lean_py.z3 import CharVal, CharRef
 
         c = CharVal("A")
         assert isinstance(c, CharRef)
 
     def test_char_val_from_int(self):
         """CharVal creates a char literal from int."""
-        from lean_py.z3 import CharVal, CharRef
 
         c = CharVal(65)
         assert isinstance(c, CharRef)
 
     def test_char_to_int(self):
         """CharToInt returns ArithRef."""
-        from lean_py.z3 import CharVal, CharToInt
 
         from lean_py.z3.core import ArithRef
 
@@ -1898,7 +1924,6 @@ class TestChar:
 
     def test_char_to_bv(self):
         """CharToBv returns BitVecRef."""
-        from lean_py.z3 import CharVal, CharToBv
 
         c = CharVal("A")
         bv = CharToBv(c)
@@ -1906,7 +1931,6 @@ class TestChar:
 
     def test_char_is_digit(self):
         """CharIsDigit returns BoolRef."""
-        from lean_py.z3 import CharVal, CharIsDigit
         from lean_py.z3.core import BoolRef
 
         c = CharVal("5")
@@ -1915,14 +1939,12 @@ class TestChar:
 
     def test_char_to_int_semantic(self, kernel):
         """CharToInt(CharVal('A')) == 65."""
-        from lean_py.z3 import CharVal, CharToInt
 
         claim = CharToInt(CharVal("A")) == IntVal(65)
         assert _try_prove(claim)
 
     def test_char_const(self):
         """Const with CharSort creates CharRef."""
-        from lean_py.z3 import CharSort, CharRef
 
         c = Const("c", CharSort())
         assert isinstance(c, CharRef)
@@ -1938,35 +1960,32 @@ class TestSets:
 
     def test_set_sort_creation(self):
         """SetSort creates ArraySortRef."""
-        from lean_py.z3 import SetSort, ArraySortRef
+        from lean_py.z3 import ArraySortRef
 
         s = SetSort(IntSort())
         assert isinstance(s, ArraySortRef)
 
     def test_empty_set(self):
         """EmptySet creates an array expression."""
-        from lean_py.z3 import EmptySet, ArrayRef
 
         s = EmptySet(IntSort())
         assert isinstance(s, ArrayRef)
 
     def test_full_set(self):
         """FullSet creates an array expression."""
-        from lean_py.z3 import FullSet, ArrayRef
 
         s = FullSet(IntSort())
         assert isinstance(s, ArrayRef)
 
     def test_set_add(self):
         """SetAdd adds element to set."""
-        from lean_py.z3 import SetAdd, EmptySet, ArrayRef
 
         s = SetAdd(EmptySet(IntSort()), IntVal(1))
         assert isinstance(s, ArrayRef)
 
     def test_is_member(self):
         """IsMember tests membership."""
-        from lean_py.z3 import IsMember, SetAdd, EmptySet, BoolRef
+        from lean_py.z3 import BoolRef
 
         s = SetAdd(EmptySet(IntSort()), IntVal(1))
         m = IsMember(IntVal(1), s)
@@ -1974,14 +1993,12 @@ class TestSets:
 
     def test_is_member_semantic(self, kernel):
         """IsMember(1, SetAdd(EmptySet, 1)) is provable."""
-        from lean_py.z3 import IsMember, SetAdd, EmptySet
 
         claim = IsMember(IntVal(1), SetAdd(EmptySet(IntSort()), IntVal(1)))
         assert _try_prove(claim)
 
     def test_set_union(self):
         """SetUnion creates an array expression."""
-        from lean_py.z3 import SetUnion, EmptySet, SetAdd, ArrayRef
 
         a = SetAdd(EmptySet(IntSort()), IntVal(1))
         b = SetAdd(EmptySet(IntSort()), IntVal(2))
@@ -1990,7 +2007,6 @@ class TestSets:
 
     def test_set_intersect(self):
         """SetIntersect creates an array expression."""
-        from lean_py.z3 import SetIntersect, EmptySet, SetAdd
 
         a = SetAdd(EmptySet(IntSort()), IntVal(1))
         b = SetAdd(EmptySet(IntSort()), IntVal(1))
@@ -1999,14 +2015,12 @@ class TestSets:
 
     def test_set_complement(self):
         """SetComplement creates an array expression."""
-        from lean_py.z3 import SetComplement, EmptySet
 
         s = SetComplement(EmptySet(IntSort()))
         assert isinstance(s, ExprRef)
 
     def test_set_difference(self):
         """SetDifference creates an array expression."""
-        from lean_py.z3 import SetDifference, EmptySet, SetAdd
 
         a = SetAdd(EmptySet(IntSort()), IntVal(1))
         b = EmptySet(IntSort())
@@ -2015,7 +2029,7 @@ class TestSets:
 
     def test_is_subset(self):
         """IsSubset creates a BoolRef."""
-        from lean_py.z3 import IsSubset, EmptySet, SetAdd, BoolRef
+        from lean_py.z3 import BoolRef
 
         a = EmptySet(IntSort())
         b = SetAdd(EmptySet(IntSort()), IntVal(1))
@@ -2033,21 +2047,18 @@ class TestSequences:
 
     def test_seq_sort_creation(self):
         """SeqSort creates a SeqSortRef."""
-        from lean_py.z3 import SeqSort, SeqSortRef
 
         s = SeqSort(IntSort())
         assert isinstance(s, SeqSortRef)
 
     def test_seq_sort_char_is_string(self):
         """SeqSort(CharSort()) returns StringSort."""
-        from lean_py.z3 import SeqSort, CharSort
 
         s = SeqSort(CharSort())
         assert isinstance(s, StringSortRef)
 
     def test_empty_seq(self):
         """Empty(SeqSort) creates a SeqRef."""
-        from lean_py.z3 import SeqSort, SeqRef, Empty
 
         s = SeqSort(IntSort())
         e = Empty(s)
@@ -2055,14 +2066,12 @@ class TestSequences:
 
     def test_unit_seq(self):
         """Unit creates a SeqRef from a non-string element."""
-        from lean_py.z3 import Unit, SeqRef
 
         u = Unit(IntVal(42))
         assert isinstance(u, SeqRef)
 
     def test_seq_concat(self):
         """Sequence concatenation via + operator."""
-        from lean_py.z3 import SeqSort, SeqRef, Empty, Unit
 
         s1 = Unit(IntVal(1))
         s2 = Unit(IntVal(2))
@@ -2073,16 +2082,15 @@ class TestSequences:
 
     def test_seq_length(self):
         """Length works on SeqRef."""
-        from lean_py.z3 import Unit, SeqRef
         from lean_py.z3.core import ArithRef
 
         s = Unit(IntVal(42))
-        l = Length(s)
-        assert isinstance(l, ArithRef)
+        length = Length(s)
+        assert isinstance(length, ArithRef)
 
     def test_seq_contains(self):
         """Contains works on SeqRef."""
-        from lean_py.z3 import Unit, SeqRef, BoolRef
+        from lean_py.z3 import BoolRef
 
         s = Unit(IntVal(1))
         t = Unit(IntVal(1))
@@ -2091,7 +2099,7 @@ class TestSequences:
 
     def test_seq_prefix_of(self):
         """PrefixOf works on SeqRef."""
-        from lean_py.z3 import Unit, SeqRef, BoolRef
+        from lean_py.z3 import BoolRef
 
         s = Unit(IntVal(1))
         t = Unit(IntVal(1))
@@ -2100,7 +2108,7 @@ class TestSequences:
 
     def test_seq_suffix_of(self):
         """SuffixOf works on SeqRef."""
-        from lean_py.z3 import Unit, SeqRef, BoolRef
+        from lean_py.z3 import BoolRef
 
         s = Unit(IntVal(1))
         t = Unit(IntVal(1))
@@ -2109,7 +2117,6 @@ class TestSequences:
 
     def test_seq_const(self):
         """Const with SeqSort creates SeqRef."""
-        from lean_py.z3 import SeqSort, SeqRef
 
         s = Const("s", SeqSort(IntSort()))
         assert isinstance(s, SeqRef)

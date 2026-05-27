@@ -17,7 +17,8 @@ import hashlib
 import json
 import os
 import shutil
-from importlib.metadata import distribution, version as pkg_version
+from importlib.metadata import distribution
+from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 from lean_py.kernel import Kernel

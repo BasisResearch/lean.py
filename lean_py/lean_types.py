@@ -7,8 +7,9 @@ Higher level types wrapping Lean objects.
 # Higher-level Python Type Wrappers
 # ============================================================================
 
-from ctypes import POINTER, addressof
 import ctypes
+from ctypes import POINTER, addressof
+
 from lean_py.base_types import LeanArrayObject, LeanStringObject
 from lean_py.lean_ffi import LeanFFI, get_lean_ffi
 
@@ -68,9 +69,7 @@ class LeanArray(LeanValue):
         """Get element at index."""
         array_obj = ctypes.cast(self.ptr, POINTER(LeanArrayObject)).contents
         if index < 0 or index >= array_obj.m_size:
-            raise IndexError(
-                f"Index {index} out of bounds for array of size {array_obj.m_size}"
-            )
+            raise IndexError(f"Index {index} out of bounds for array of size {array_obj.m_size}")
 
         elem_ptr = array_obj.m_data[index]
         self.ffi.inc_ref(elem_ptr)

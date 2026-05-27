@@ -24,9 +24,10 @@ import ctypes
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from ctypes import POINTER, c_uint8, c_void_p
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from lean_py._runtime import get_structs
 from lean_py.base_types import LeanObject
@@ -59,11 +60,7 @@ def _list_init_symbols(dylib: Path) -> list[str]:
         # macOS prefixes exported symbols with `_`; strip that.
         if sym.startswith("_"):
             sym = sym[1:]
-        if (
-            sym.startswith("initialize_")
-            and "Lean_" not in sym
-            and "LeanPy_" not in sym
-        ):
+        if sym.startswith("initialize_") and "Lean_" not in sym and "LeanPy_" not in sym:
             candidates.append(sym)
     return candidates
 
@@ -175,16 +172,13 @@ class _StructureType(_InductiveType):
     def __call__(self, *args, **kwargs) -> LeanInductiveValue:
         if kwargs:
             raise TypeError(
-                f"{self._ti.name}: keyword fields not supported yet "
-                f"(use positional args)"
+                f"{self._ti.name}: keyword fields not supported yet (use positional args)"
             )
         if len(args) != len(self._ctor.fields):
             raise TypeError(
                 f"{self._ti.name} expects {len(self._ctor.fields)} args, got {len(args)}"
             )
-        return LeanInductiveValue(
-            self._ti.name, self._ctor.name, self._ctor.tag, tuple(args)
-        )
+        return LeanInductiveValue(self._ti.name, self._ctor.name, self._ctor.tag, tuple(args))
 
 
 # ============================================================================
@@ -192,9 +186,7 @@ class _StructureType(_InductiveType):
 # ============================================================================
 
 
-def _build_callable(
-    lib: ctypes.CDLL, finfo: FuncInfo, marshaller: Marshaller
-) -> Callable:
+def _build_callable(lib: ctypes.CDLL, finfo: FuncInfo, marshaller: Marshaller) -> Callable:
     """Build a Python wrapper around an `@[export]`'d Lean function.
 
     Conventions for the C ABI of Lean-exported functions:
@@ -241,17 +233,13 @@ def _build_callable(
     # If the return is a pointer, we need to cast it back to LeanObjectPtr
     # before handing it to the unmarshaller.
     LObjPtr = get_structs()["_LeanObjectPtr"]
-    return_is_pointer = isinstance(rwrap.ctype, type) and issubclass(
-        rwrap.ctype, ctypes._Pointer
-    )
+    return_is_pointer = isinstance(rwrap.ctype, type) and issubclass(rwrap.ctype, ctypes._Pointer)
 
     _ffi = get_lean_ffi()
 
     def _wrapper(*args):
         if len(args) != len(pwraps):
-            raise TypeError(
-                f"{finfo.exportName}: expected {len(pwraps)} args, got {len(args)}"
-            )
+            raise TypeError(f"{finfo.exportName}: expected {len(pwraps)} args, got {len(args)}")
         cargs = []
         for w, a in zip(pwraps, args):
             v = w.to_lean(a)
@@ -296,7 +284,7 @@ class LeanLibrary:
         library_name: str | None = None,
         *,
         build: bool = False,
-    ) -> "LeanLibrary":
+    ) -> LeanLibrary:
         """Load a Lean library from a Lake project directory.
 
         Looks for `<lake_dir>/.lake/build/lib/lib<library_name>.<ext>`
@@ -348,9 +336,7 @@ class LeanLibrary:
             if not build_root.is_dir():
                 return f"{build_root} does not exist (lake build did not run or failed)"
             entries = sorted(
-                str(p.relative_to(build_root))
-                for p in build_root.rglob("*")
-                if p.is_file()
+                str(p.relative_to(build_root)) for p in build_root.rglob("*") if p.is_file()
             )
             return f"contents of {build_root}: {entries[:50]}"
 
@@ -360,9 +346,7 @@ class LeanLibrary:
                 # Some Lake versions don't honour `defaultFacets = ["shared"]`
                 # in lakefile.toml; ask for the shared facet explicitly.
                 try:
-                    run_command(
-                        ["lake", "build", f"{library_name}:shared"], cwd=lake_path
-                    )
+                    run_command(["lake", "build", f"{library_name}:shared"], cwd=lake_path)
                 except Exception:
                     pass
                 found = _find(library_name)
@@ -383,8 +367,7 @@ class LeanLibrary:
             ]
         if not shared:
             raise FileNotFoundError(
-                f"no shared library found under {build_root}; run `lake build`. "
-                f"{_diagnostic()}"
+                f"no shared library found under {build_root}; run `lake build`. {_diagnostic()}"
             )
         if len(shared) > 1:
             names = ", ".join(p.stem.removeprefix("lib") for p in shared)
@@ -568,10 +551,7 @@ class LeanLibrary:
         raise KeyError(key)
 
     def __repr__(self) -> str:
-        return (
-            f"<LeanLibrary {self.name!r} "
-            f"funcs={len(self._funcs)} types={len(self._types)}>"
-        )
+        return f"<LeanLibrary {self.name!r} funcs={len(self._funcs)} types={len(self._types)}>"
 
 
 # Re-export under both names for compatibility.

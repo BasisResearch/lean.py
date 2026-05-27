@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import sympy
-from sympy import Integer, Symbol, Eq, simplify
+from sympy import Eq, Integer, Symbol, simplify
 
 from lean_py.marshal import LeanInductiveValue
 
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 #  Name helpers
 # ---------------------------------------------------------------------------
+
 
 def name_to_str(name: LeanInductiveValue) -> str:
     """Walk a ``Lean.Name`` ADT (anonymous / str / num) to a dot-separated string."""
@@ -53,13 +54,14 @@ def name_to_str(name: LeanInductiveValue) -> str:
 #  Expr helpers
 # ---------------------------------------------------------------------------
 
+
 def uncurry_app(expr: LeanInductiveValue) -> tuple[LeanInductiveValue, list[LeanInductiveValue]]:
     """Flatten nested ``Expr.app(f, x)`` into ``(head, [arg0, arg1, ...])``."""
     args: list[LeanInductiveValue] = []
     cur = expr
     while cur.ctor == "app":
-        args.append(cur._1)   # arg
-        cur = cur._0          # fn
+        args.append(cur._1)  # arg
+        cur = cur._0  # fn
     args.reverse()
     return cur, args
 
@@ -72,19 +74,24 @@ def uncurry_app(expr: LeanInductiveValue) -> tuple[LeanInductiveValue, list[Lean
 # For elaborated Lean expressions, the first few args are type/instance params;
 # we only look at the *last N* arguments.
 
+
 def _binop(op):
     """Return a builder for a binary operation (last 2 args)."""
+
     def build(args):
         a = expr_to_sympy(args[-2])
         b = expr_to_sympy(args[-1])
         return op(a, b)
+
     return 2, build
 
 
 def _unop(op):
     """Return a builder for a unary operation (last 1 arg)."""
+
     def build(args):
         return op(expr_to_sympy(args[-1]))
+
     return 1, build
 
 
@@ -93,11 +100,11 @@ _DISPATCH: dict[str, tuple[int, object]] = {
     "HSub.hSub": _binop(lambda a, b: a - b),
     "HMul.hMul": _binop(lambda a, b: a * b),
     "HDiv.hDiv": _binop(lambda a, b: a / b),
-    "HPow.hPow": _binop(lambda a, b: a ** b),
-    "Eq":        (2, lambda args: Eq(expr_to_sympy(args[-2]), expr_to_sympy(args[-1]))),
-    "Neg.neg":   _unop(lambda x: -x),
+    "HPow.hPow": _binop(lambda a, b: a**b),
+    "Eq": (2, lambda args: Eq(expr_to_sympy(args[-2]), expr_to_sympy(args[-1]))),
+    "Neg.neg": _unop(lambda x: -x),
     "HNeg.hNeg": _unop(lambda x: -x),
-    "Nat.succ":  (1, lambda args: expr_to_sympy(args[-1]) + 1),
+    "Nat.succ": (1, lambda args: expr_to_sympy(args[-1]) + 1),
     "Int.ofNat": (1, lambda args: expr_to_sympy(args[-1])),
     "Int.negSucc": (1, lambda args: -(expr_to_sympy(args[-1]) + 1)),
 }
@@ -175,6 +182,7 @@ def expr_to_sympy(expr: LeanInductiveValue) -> sympy.Basic:
 #  Proposition checkers
 # ---------------------------------------------------------------------------
 
+
 def sympy_prop_check(prop: sympy.Basic) -> bool:
     """Check if a SymPy proposition is identically true."""
     s = simplify(prop)
@@ -206,9 +214,7 @@ def decode_and_check_prop(lean_obj) -> bool:
     Called from the Lean tactic via ``Py.ofLeanObj`` + ``@[python]``.
     """
     if _marshaller is None:
-        raise RuntimeError(
-            "lean_to_sympy.setup(lib) must be called before decode_and_check_prop"
-        )
+        raise RuntimeError("lean_to_sympy.setup(lib) must be called before decode_and_check_prop")
     expr_tree = _marshaller.decode_lean_obj("Lean.Expr", lean_obj)
     prop = expr_to_sympy(expr_tree)
     return sympy_prop_check(prop)

@@ -7,7 +7,6 @@ Z3Expr values only at proof time.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Union
 
 # ---------------------------------------------------------------------------
 # Sorts
@@ -88,22 +87,22 @@ class SeqASTSort:
     elem: ASTSort
 
 
-ASTSort = Union[
-    PropSort,
-    IntASTSort,
-    NatASTSort,
-    RealASTSort,
-    BitvecASTSort,
-    TypeASTSort,
-    UninterpASTSort,
-    ArrowASTSort,
-    StringASTSort,
-    FpASTSort,
-    FinDomainASTSort,
-    InductiveASTSort,
-    CharASTSort,
-    SeqASTSort,
-]
+ASTSort = (
+    PropSort
+    | IntASTSort
+    | NatASTSort
+    | RealASTSort
+    | BitvecASTSort
+    | TypeASTSort
+    | UninterpASTSort
+    | ArrowASTSort
+    | StringASTSort
+    | FpASTSort
+    | FinDomainASTSort
+    | InductiveASTSort
+    | CharASTSort
+    | SeqASTSort
+)
 
 # ---------------------------------------------------------------------------
 # Operations
@@ -548,69 +547,69 @@ class SeqNthNode:
     idx: ASTNode
 
 
-ASTNode = Union[
-    Var,
-    IntLit,
-    NatLit,
-    BoolLit,
-    BvLit,
-    BinOpNode,
-    UnOpNode,
-    IteNode,
-    ForAllNode,
-    ExistsNode,
-    AppNode,
-    DistinctNode,
-    SelectNode,
-    StoreNode,
-    ConstArrayNode,
-    ExtractNode,
-    ZeroExtNode,
-    SignExtNode,
-    Int2BvNode,
-    ToRealNode,
-    ToIntNode,
-    LambdaNode,
-    StringLit,
-    StrLenNode,
-    StrContainsNode,
-    StrPrefixOfNode,
-    StrSuffixOfNode,
-    StrReplaceNode,
-    StrConcatNode,
-    StrSubstrNode,
-    StrIndexOfNode,
-    StrToIntNode,
-    IntToStrNode,
-    ReStarNode,
-    RePlusNode,
-    ReOptionNode,
-    ReUnionNode,
-    ReIntersectNode,
-    ReConcatNode,
-    ReRangeNode,
-    ReComplementNode,
-    ReLoopNode,
-    InReNode,
-    FpLitNode,
-    FpOpNode,
-    FinDomainLit,
-    InductiveCtorNode,
-    InductiveAccessorNode,
-    InductiveRecognizerNode,
-    CharLit,
-    CharToNatNode,
-    CharFromBvNode,
-    CharIsDigitNode,
-    SeqEmptyNode,
-    SeqUnitNode,
-    SeqLenNode,
-    SeqConcatNode,
-    SeqContainsNode,
-    SeqPrefixOfNode,
-    SeqSuffixOfNode,
-    SeqNthNode,
-]
+ASTNode = (
+    Var
+    | IntLit
+    | NatLit
+    | BoolLit
+    | BvLit
+    | BinOpNode
+    | UnOpNode
+    | IteNode
+    | ForAllNode
+    | ExistsNode
+    | AppNode
+    | DistinctNode
+    | SelectNode
+    | StoreNode
+    | ConstArrayNode
+    | ExtractNode
+    | ZeroExtNode
+    | SignExtNode
+    | Int2BvNode
+    | ToRealNode
+    | ToIntNode
+    | LambdaNode
+    | StringLit
+    | StrLenNode
+    | StrContainsNode
+    | StrPrefixOfNode
+    | StrSuffixOfNode
+    | StrReplaceNode
+    | StrConcatNode
+    | StrSubstrNode
+    | StrIndexOfNode
+    | StrToIntNode
+    | IntToStrNode
+    | ReStarNode
+    | RePlusNode
+    | ReOptionNode
+    | ReUnionNode
+    | ReIntersectNode
+    | ReConcatNode
+    | ReRangeNode
+    | ReComplementNode
+    | ReLoopNode
+    | InReNode
+    | FpLitNode
+    | FpOpNode
+    | FinDomainLit
+    | InductiveCtorNode
+    | InductiveAccessorNode
+    | InductiveRecognizerNode
+    | CharLit
+    | CharToNatNode
+    | CharFromBvNode
+    | CharIsDigitNode
+    | SeqEmptyNode
+    | SeqUnitNode
+    | SeqLenNode
+    | SeqConcatNode
+    | SeqContainsNode
+    | SeqPrefixOfNode
+    | SeqSuffixOfNode
+    | SeqNthNode
+)
 
 __all__ = [
     # Sorts

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from ctypes import _Pointer
 
-from lean_py._runtime import get_structs, get_constants
+from lean_py._runtime import get_constants, get_structs
 
 # Dynamically created struct types
 _structs = get_structs()

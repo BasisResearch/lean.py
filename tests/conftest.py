@@ -23,7 +23,9 @@ from lean_py.utils import add_lean_lib_to_dyld_path
 def example_lib() -> LeanLibrary:
     add_lean_lib_to_dyld_path()
     return LeanLibrary.from_lake(
-        Path(__file__).parent / "lean", "TestLib", build=True,
+        Path(__file__).parent / "lean",
+        "TestLib",
+        build=True,
     )
 
 
@@ -34,6 +36,7 @@ def pytest_collection_modifyitems(config, items):
     finalisation interacts poorly with later tests. Reordering keeps
     the rest of the suite green.
     """
+
     def is_kernel_full(item):
         return "test_kernel_full" in item.nodeid
 

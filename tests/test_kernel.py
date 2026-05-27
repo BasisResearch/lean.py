@@ -54,7 +54,7 @@ def test_infer_type(kernel):
     t = kernel.leanpy_kernel_infer_type("true")
     assert "Bool" in t
 
-    t = kernel.leanpy_kernel_infer_type("\"hello\"")
+    t = kernel.leanpy_kernel_infer_type('"hello"')
     assert "String" in t
 
 

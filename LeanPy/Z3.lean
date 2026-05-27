@@ -247,7 +247,20 @@ partial def compileSort (varMap : Std.HashMap String Lean.Expr) : Z3Sort → Met
   | .uninterp name =>
     match varMap.get? name with
     | some e => return e
-    | none   => throwError s!"compileSort: unknown uninterpreted sort '{name}'"
+    | none => do
+      let tName := Name.mkSimple name
+      let env ← getEnv
+      if env.contains tName then return mkConst tName
+      else do
+        -- Auto-declare as an opaque type (axiom of sort Type)
+        let decl := Declaration.axiomDecl {
+          name := tName
+          levelParams := []
+          type := mkSort (.succ .zero)
+          isUnsafe := false
+        }
+        addDecl decl
+        return mkConst tName
   | .arrow dom cod => do
     let domExpr ← compileSort varMap dom
     let codExpr ← compileSort varMap cod
@@ -1000,7 +1013,8 @@ def z3Compile (expr : Z3Expr) : IO Lean.Expr := do
     let ctx ← LeanPy.Kernel.freshCoreContext
     let cs : Core.State := { env }
     let act : MetaM Lean.Expr := compileExpr {} expr
-    let (r, _) ← (act.run' {} {}).toIO ctx cs
+    let (r, cs') ← (act.run' {} {}).toIO ctx cs
+    LeanPy.Kernel.envRef.set (some cs'.env)
     return r
 
 @[python "z3_goal_create_expr"]

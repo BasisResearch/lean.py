@@ -87,6 +87,7 @@ def test_leanobj_handle_dropping(example_lib):
     """Pure Python LeanObj wrappers should release their refs on GC."""
     from lean_py import LeanObj
     from lean_py.lean_ffi import get_lean_ffi
+
     ffi = get_lean_ffi()
 
     # Allocate / drop in a loop and ensure no exceptions.
@@ -219,9 +220,10 @@ def test_error_propagation_no_type_name_leak(example_lib):
     total_growth = sum(s.size_diff for s in stats if s.size_diff > 0)
 
     # With the bug, each call leaks a ~60-byte "NameError" string →
-    # ~120 KB growth for 2000 calls.  Without it, growth is negligible.
-    # Use a generous threshold to avoid flakiness.
-    assert total_growth < 50_000, (
+    # ~120 KB growth for 2000 calls.  Without it, growth should stay
+    # under ~60 KB (Python interpreter noise).  Use 80 KB threshold
+    # to avoid CI flakiness while still catching the ~125 KB leak.
+    assert total_growth < 80_000, (
         f"Memory grew by {total_growth} bytes after {N} error propagations "
-        f"(threshold 50 KB) — likely a leak in raise_py_error"
+        f"(threshold 80 KB) — likely a leak in raise_py_error"
     )

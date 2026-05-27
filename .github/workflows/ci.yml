@@ -2,6 +2,22 @@ name: CI
 on: [push, pull_request]
 
 jobs:
+  # Fast lint pass: ruff format, ruff check, mypy.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: uv sync --dev
+      - name: ruff format
+        run: uv run ruff format --check .
+      - name: ruff check
+        run: uv run ruff check .
+      - name: mypy
+        run: uv run mypy lean_py/
+
   # Run the full test suite on Linux + macOS.
   test:
     strategy:
