@@ -25,6 +25,8 @@ inductive Z3Sort where
   | uninterp (name : String)
   | arrow (dom cod : Z3Sort)
   | inductive_ (name : String)
+  | char
+  | seq (elemSort : Z3Sort)
   deriving Inhabited
 
 inductive Z3BinOp where
@@ -97,6 +99,20 @@ inductive Z3Expr where
   | inductiveCtor (typeName : String) (ctorName : String) (args : Array Z3Expr)
   | inductiveAccessor (typeName : String) (accessorName : String) (arg : Z3Expr)
   | inductiveRecognizer (typeName : String) (recognizerName : String) (arg : Z3Expr)
+  -- Char operations
+  | charLit (val : Nat)
+  | charToNat (arg : Z3Expr)
+  | charFromBv (arg : Z3Expr)
+  | charIsDigit (arg : Z3Expr)
+  -- Sequence operations
+  | seqEmpty (elemSort : Z3Sort)
+  | seqUnit (arg : Z3Expr)
+  | seqLen (arg : Z3Expr)
+  | seqConcat (lhs rhs : Z3Expr)
+  | seqContains (haystack needle : Z3Expr)
+  | seqPrefixOf (prefix_ s : Z3Expr)
+  | seqSuffixOf (suffix_ s : Z3Expr)
+  | seqNth (s idx : Z3Expr)
   deriving Inhabited
 
 structure Z3CtorField where
@@ -177,10 +193,35 @@ def strReplaceFirst (s old new_ : String) : String :=
   | [x]          => x  -- old not found
   | first :: rest => first ++ new_ ++ String.intercalate old rest
 
+/-- Z3-compatible list containment: check if needle is a contiguous sublist. -/
+def listContainsSublist [BEq α] (haystack needle : List α) : Bool :=
+  match h_nLen : needle.length with
+  | 0 => true
+  | _ + 1 => go haystack needle needle.length haystack.length 0 (by omega)
+where
+  go (h n : List α) (nLen hLen i : Nat) (hn : nLen ≥ 1) : Bool :=
+    if h_guard : i + nLen > hLen then false
+    else if (h.drop i).take nLen == n then true
+    else go h n nLen hLen (i + 1) hn
+  termination_by hLen - i
+  decreasing_by omega
+
 /-- Z3-compatible str.substr (SMT-LIB semantics): extract `length` chars starting at `offset`.
     Uses List operations to avoid `String.Pos` dependency issues. -/
 def strSubstr (s : String) (offset length : Int) : String :=
   String.ofList (s.toList.drop offset.toNat |>.take length.toNat)
+
+/-- Z3-compatible int.to.str: returns "" for negative integers (SMT-LIB semantics). -/
+def intToStrZ3 (n : Int) : String :=
+  if n < 0 then "" else ToString.toString n
+
+/-- IEEE 754 fpIsNegative: true when sign bit is set and not NaN. -/
+def fpIsNegative (x : Float) : Bool :=
+  x.toBits.toNat ≥ (1 <<< 63) && !x.isNaN
+
+/-- IEEE 754 fpIsPositive: true when sign bit is clear and not NaN. -/
+def fpIsPositive (x : Float) : Bool :=
+  x.toBits.toNat < (1 <<< 63) && !x.isNaN
 
 /-- Z3-compatible str.to.int: returns -1 for non-numeric strings (SMT-LIB semantics). -/
 def strToIntZ3 (s : String) : Int :=
@@ -219,6 +260,10 @@ partial def compileSort (varMap : Std.HashMap String Lean.Expr) : Z3Sort → Met
       let env ← getEnv
       if env.contains tName then return mkConst tName
       else throwError s!"compileSort: inductive '{name}' not in environment"
+  | .char => return mkConst ``Char
+  | .seq s => do
+    let elemExpr ← compileSort varMap s
+    return mkApp (mkConst ``List [.succ .zero]) elemExpr
 
 /-! ## Expression compiler & Regex AST compiler -/
 
@@ -601,7 +646,7 @@ partial def compileExpr (varMap : Std.HashMap String Lean.Expr) : Z3Expr → Met
     Meta.mkAppM ``LeanPy.Z3.strToIntZ3 #[a]
   | .intToStr arg => do
     let a ← compileExpr varMap arg
-    Meta.mkAppM ``ToString.toString #[a]
+    Meta.mkAppM ``LeanPy.Z3.intToStrZ3 #[a]
   -- Regex operations using lean-regex
   | .reStar arg => do
     let a ← compileRegex varMap arg
@@ -700,6 +745,57 @@ partial def compileExpr (varMap : Std.HashMap String Lean.Expr) : Z3Expr → Met
         branch := Expr.lam fieldName fieldTypes[idx]! branch .default
       branches := branches.push branch
     return mkAppN (mkConst casesOnName [.succ .zero]) (#[motive, a] ++ branches)
+  -- Char operations
+  | .charLit n => return mkApp (mkConst ``Char.ofNat) (mkNatLit n)
+  | .charToNat arg => do
+    let a ← compileExpr varMap arg
+    let nat ← Meta.mkAppM ``Char.toNat #[a]
+    Meta.mkAppM ``Int.ofNat #[nat]
+  | .charFromBv arg => do
+    let a ← compileExpr varMap arg
+    let nat ← Meta.mkAppM ``BitVec.toNat #[a]
+    return mkApp (mkConst ``Char.ofNat) nat
+  | .charIsDigit arg => do
+    let a ← compileExpr varMap arg
+    let c ← Meta.mkAppM ``Char.isDigit #[a]
+    Meta.mkEq c (mkConst ``true)
+  -- Sequence operations
+  | .seqEmpty es => do
+    let elemExpr ← compileSort varMap es
+    return mkApp (mkConst ``List.nil [.succ .zero]) elemExpr
+  | .seqUnit arg => do
+    let a ← compileExpr varMap arg
+    let aTy ← Meta.inferType a
+    let nil := mkApp (mkConst ``List.nil [.succ .zero]) aTy
+    return mkAppN (mkConst ``List.cons [.succ .zero]) #[aTy, a, nil]
+  | .seqLen arg => do
+    let a ← compileExpr varMap arg
+    let len ← Meta.mkAppM ``List.length #[a]
+    Meta.mkAppM ``Int.ofNat #[len]
+  | .seqConcat lhs rhs => do
+    let a ← compileExpr varMap lhs
+    let b ← compileExpr varMap rhs
+    Meta.mkAppM ``HAppend.hAppend #[a, b]
+  | .seqContains haystack needle => do
+    let a ← compileExpr varMap haystack
+    let b ← compileExpr varMap needle
+    let call ← Meta.mkAppM ``LeanPy.Z3.listContainsSublist #[a, b]
+    Meta.mkEq call (mkConst ``true)
+  | .seqPrefixOf prefix_ s => do
+    let a ← compileExpr varMap prefix_
+    let b ← compileExpr varMap s
+    let call ← Meta.mkAppM ``List.isPrefixOf #[a, b]
+    Meta.mkEq call (mkConst ``true)
+  | .seqSuffixOf suffix_ s => do
+    let a ← compileExpr varMap suffix_
+    let b ← compileExpr varMap s
+    let call ← Meta.mkAppM ``List.isSuffixOf #[a, b]
+    Meta.mkEq call (mkConst ``true)
+  | .seqNth s idx => do
+    let a ← compileExpr varMap s
+    let i ← compileExpr varMap idx
+    let iNat ← Meta.mkAppM ``Int.toNat #[i]
+    Meta.mkAppM ``List.getD #[a, iNat]
   -- Floating-point
   | .fpLit bits 11 53 => do
     let bitsExpr ← Meta.mkNumeral (mkConst ``UInt64) bits
@@ -751,13 +847,11 @@ partial def compileExpr (varMap : Std.HashMap String Lean.Expr) : Z3Expr → Met
     | "fpIsNormal" | "fpIsSubnormal" =>
         throwError s!"fpOp '{name}' not yet supported"
     | "fpIsNegative" => do
-        let zeroBits ← Meta.mkNumeral (mkConst ``UInt64) 0
-        let zero := mkApp (mkConst ``Float.ofBits) zeroBits
-        Meta.mkAppM ``LT.lt #[cs[0]!, zero]
+        let c ← Meta.mkAppM ``LeanPy.Z3.fpIsNegative #[cs[0]!]
+        Meta.mkEq c (mkConst ``true)
     | "fpIsPositive" => do
-        let zeroBits ← Meta.mkNumeral (mkConst ``UInt64) 0
-        let zero := mkApp (mkConst ``Float.ofBits) zeroBits
-        Meta.mkAppM ``LT.lt #[zero, cs[0]!]
+        let c ← Meta.mkAppM ``LeanPy.Z3.fpIsPositive #[cs[0]!]
+        Meta.mkEq c (mkConst ``true)
     -- Conversions
     | "fpToIEEEBV" => do
         let bits ← Meta.mkAppM ``Float.toBits #[cs[0]!]
