@@ -1852,6 +1852,18 @@ class TestValueConstructors:
         v = RealVal(5)
         assert is_real(v)
 
+    def test_realval_fraction_string(self):
+        v = RealVal("1/2")
+        assert isinstance(v, RatNumRef)
+        assert v.numerator().as_long() == 1
+        assert v.denominator().as_long() == 2
+
+    def test_realval_fraction_string_large(self):
+        v = RealVal("355/113")
+        assert isinstance(v, RatNumRef)
+        assert v.numerator().as_long() == 355
+        assert v.denominator().as_long() == 113
+
     def test_boolval(self):
         assert isinstance(BoolVal(True)._ast, BoolLit)
         assert isinstance(BoolVal(False)._ast, BoolLit)

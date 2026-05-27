@@ -86,6 +86,20 @@ from lean_py.z3._ast import (
     InductiveCtorNode,
     InductiveAccessorNode,
     InductiveRecognizerNode,
+    CharASTSort,
+    CharLit,
+    CharToNatNode,
+    CharFromBvNode,
+    CharIsDigitNode,
+    SeqASTSort,
+    SeqEmptyNode,
+    SeqUnitNode,
+    SeqLenNode,
+    SeqConcatNode,
+    SeqContainsNode,
+    SeqPrefixOfNode,
+    SeqSuffixOfNode,
+    SeqNthNode,
 )
 from lean_py.z3.core import (
     And,
@@ -188,6 +202,11 @@ def _marshal_sort(lib: Any, sort: ASTSort) -> Any:
         return Z3Sort.arrow(dom, cod)
     if isinstance(sort, InductiveASTSort):
         return Z3Sort.inductive_(sort.name)
+    if isinstance(sort, CharASTSort):
+        return Z3Sort.char
+    if isinstance(sort, SeqASTSort):
+        elem = _marshal_sort(lib, sort.elem)
+        return Z3Sort.seq(elem)
     raise TypeError(f"Unknown ASTSort: {type(sort)}")
 
 
@@ -376,6 +395,48 @@ def _marshal_expr(lib: Any, node: ASTNode) -> Any:
     if isinstance(node, InductiveRecognizerNode):
         arg = _marshal_expr(lib, node.arg)
         return Z3Expr.inductiveRecognizer(node.type_name, node.recognizer_name, arg)
+    # Char nodes
+    if isinstance(node, CharLit):
+        return Z3Expr.charLit(node.val)
+    if isinstance(node, CharToNatNode):
+        arg = _marshal_expr(lib, node.arg)
+        return Z3Expr.charToNat(arg)
+    if isinstance(node, CharFromBvNode):
+        arg = _marshal_expr(lib, node.arg)
+        return Z3Expr.charFromBv(arg)
+    if isinstance(node, CharIsDigitNode):
+        arg = _marshal_expr(lib, node.arg)
+        return Z3Expr.charIsDigit(arg)
+    # Seq nodes
+    if isinstance(node, SeqEmptyNode):
+        elem_sort = _marshal_sort(lib, node.elem_sort)
+        return Z3Expr.seqEmpty(elem_sort)
+    if isinstance(node, SeqUnitNode):
+        arg = _marshal_expr(lib, node.arg)
+        return Z3Expr.seqUnit(arg)
+    if isinstance(node, SeqLenNode):
+        arg = _marshal_expr(lib, node.arg)
+        return Z3Expr.seqLen(arg)
+    if isinstance(node, SeqConcatNode):
+        lhs = _marshal_expr(lib, node.lhs)
+        rhs = _marshal_expr(lib, node.rhs)
+        return Z3Expr.seqConcat(lhs, rhs)
+    if isinstance(node, SeqContainsNode):
+        a = _marshal_expr(lib, node.haystack)
+        b = _marshal_expr(lib, node.needle)
+        return Z3Expr.seqContains(a, b)
+    if isinstance(node, SeqPrefixOfNode):
+        a = _marshal_expr(lib, node.prefix_)
+        b = _marshal_expr(lib, node.s)
+        return Z3Expr.seqPrefixOf(a, b)
+    if isinstance(node, SeqSuffixOfNode):
+        a = _marshal_expr(lib, node.suffix_)
+        b = _marshal_expr(lib, node.s)
+        return Z3Expr.seqSuffixOf(a, b)
+    if isinstance(node, SeqNthNode):
+        a = _marshal_expr(lib, node.s)
+        b = _marshal_expr(lib, node.idx)
+        return Z3Expr.seqNth(a, b)
     raise TypeError(f"Unknown ASTNode: {type(node)}")
 
 
