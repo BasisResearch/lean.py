@@ -47,24 +47,16 @@ LEAN_EXPORT lean_obj_res leanpy_keep_alive(lean_obj_arg x, lean_obj_arg w) {
  * Debug helper: read the m_rc of a lean_object* passed from Python.
  * Called as:  lib._cffi.leanpy_debug_rc(ptr)
  * Returns:    lean_io_result_mk_ok(lean_box(m_rc))
+ *
+ * Called from Python ctypes — the caller does NOT adjust the Lean
+ * refcount before calling, so we must not consume the reference.
+ * b_lean_obj_arg signals borrowed semantics.
  */
-LEAN_EXPORT lean_obj_res leanpy_debug_rc(lean_obj_arg x, lean_obj_arg w) {
+LEAN_EXPORT lean_obj_res leanpy_debug_rc(b_lean_obj_arg x, lean_obj_arg w) {
     int rc = 0;
     if (!lean_is_scalar(x)) {
         rc = (int)x->m_rc;
     }
-    /* Don't consume x — caller still owns it */
-    lean_inc(x);  /* compensate for lean_obj_arg convention */
-    /* Actually: lean_obj_arg means we received an owned ref,
-       but we want to leave it alone.  We need to NOT dec it.
-       But the IO wrapper will try to dec the world param only.
-       Just return without dec'ing x — oh wait, we *received*
-       an owned ref.  We must either consume or keep it.
-       Since the caller (Python) still wants it, let's not dec.
-       The caller already inc'd for us, so just don't touch it.
-       Actually the simplest: do nothing with x, just return rc.
-       But lean_obj_arg means the callee owns it, so we must dec. */
-    lean_dec(x);
     return lean_io_result_mk_ok(lean_box((size_t)(unsigned)rc));
 }
 
@@ -283,21 +275,24 @@ static lean_object *raise_py_error(void) {
     char buf[1024];
     const char *etname = "PythonError";
     const char *emsg = "";
+    PyObject *s = NULL, *tn = NULL;
     if (evalue) {
-        PyObject *s = p_PyObject_Str(evalue);
+        s = p_PyObject_Str(evalue);
         if (s) {
             const char *cs = p_PyUnicode_AsUTF8(s);
             if (cs) emsg = cs;
         }
         if (etype) {
-            PyObject *tn = p_PyObject_GetAttrString(etype, "__name__");
+            tn = p_PyObject_GetAttrString(etype, "__name__");
             if (tn) {
                 const char *cn = p_PyUnicode_AsUTF8(tn);
                 if (cn) etname = cn;
             }
         }
         snprintf(buf, sizeof(buf), "%s: %s", etname, emsg);
-        if (s) p_Py_DecRef(s);
+        /* DecRef after snprintf: etname/emsg point into s/tn internals. */
+        if (tn) p_Py_DecRef(tn);
+        if (s)  p_Py_DecRef(s);
     } else {
         snprintf(buf, sizeof(buf), "Python error (no value)");
     }
@@ -776,7 +771,7 @@ BINOP(lean_py_div, p_PyNumber_TrueDivide)
 
 LEAN_EXPORT lean_obj_res lean_py_pow(b_lean_obj_arg a, b_lean_obj_arg b, lean_obj_arg world) {
     (void)world; ENSURE_INIT();
-    p_Py_IncRef(p_Py_None);
+    /* PyNumber_Power borrows all three arguments; no IncRef needed. */
     return ok_owned_or_err(p_PyNumber_Power(unwrap_pyobject(a), unwrap_pyobject(b), p_Py_None));
 }
 

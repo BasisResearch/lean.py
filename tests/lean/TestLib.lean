@@ -310,4 +310,14 @@ def makeDoublingSetter (_ : Unit) : IO Py := do
       Py.none ()
     | _ => throw (IO.userError s!"expected 3 args, got {args.size}")
 
+/-! ### Refcount regression test fixtures -/
+
+open LeanPy.Python in
+/-- Exercise `Py.pow` from Lean so Python tests can check for
+the Py_None refcount leak in `lean_py_pow`. -/
+@[python "py_pow_int"]
+def powInt (base : Int) (exp : Int) : IO Int := do
+  init ()
+  (← Py.pow (← Py.ofInt64 base) (← Py.ofInt64 exp)).toInt
+
 #export_python_registry "TestLib"

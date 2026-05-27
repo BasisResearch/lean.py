@@ -158,3 +158,70 @@ def test_tactic_chain_stress(example_lib):
         del next_state
         del state
     gc.collect()
+
+
+# -----------------------------------------------------------------------
+# CPython refcount regression tests for C bridge bugs
+# -----------------------------------------------------------------------
+
+
+def test_pow_smoke(example_lib):
+    """Smoke-test Py.pow through the bridge (exercises lean_py_pow).
+
+    The historical bug: p_Py_IncRef(p_Py_None) was called before
+    PyNumber_Power but never DecRef'd. On CPython <3.12 this leaked
+    one Py_None refcount per call; on 3.12+ None is immortal so
+    IncRef/DecRef are no-ops. The fix removes the spurious IncRef.
+
+    This test exercises the code path. Actual leak detection requires
+    valgrind/LeakSanitizer (see CI).
+    """
+    for _ in range(1_000):
+        assert example_lib.powInt(2, 10) == 1024
+    assert example_lib.powInt(3, 4) == 81
+
+
+def test_error_propagation_no_type_name_leak(example_lib):
+    """raise_py_error must not leak the exception type name PyObject.
+
+    The bug: PyObject_GetAttrString(etype, "__name__") returned a new
+    reference that was never Py_DecRef'd.  Each error propagation leaked
+    the type name string object.
+
+    We use tracemalloc to detect whether memory grows linearly with the
+    number of triggered errors.
+    """
+    import tracemalloc
+
+    # Warm up: trigger a few errors to stabilise any one-time allocations.
+    for _ in range(50):
+        try:
+            example_lib.pythonEvalInt("undefined_variable_xyzzy")
+        except Exception:
+            pass
+
+    gc.collect()
+    tracemalloc.start()
+    snap_before = tracemalloc.take_snapshot()
+
+    N = 2_000
+    for _ in range(N):
+        try:
+            example_lib.pythonEvalInt("undefined_variable_xyzzy")
+        except Exception:
+            pass
+
+    gc.collect()
+    snap_after = tracemalloc.take_snapshot()
+    tracemalloc.stop()
+
+    stats = snap_after.compare_to(snap_before, "lineno")
+    total_growth = sum(s.size_diff for s in stats if s.size_diff > 0)
+
+    # With the bug, each call leaks a ~60-byte "NameError" string →
+    # ~120 KB growth for 2000 calls.  Without it, growth is negligible.
+    # Use a generous threshold to avoid flakiness.
+    assert total_growth < 50_000, (
+        f"Memory grew by {total_growth} bytes after {N} error propagations "
+        f"(threshold 50 KB) — likely a leak in raise_py_error"
+    )
