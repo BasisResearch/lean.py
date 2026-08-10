@@ -9,8 +9,17 @@ These dataclasses are constructed from JSON returned by the
 from __future__ import annotations
 
 import json
+import keyword
 from dataclasses import dataclass, field
 from typing import Any
+
+
+def py_ident(name: str) -> str:
+    """A short Lean name made into a valid, non-keyword Python identifier."""
+    short = name.split(".")[-1]
+    if not short.isidentifier() or keyword.iskeyword(short):
+        return short + "_"
+    return short
 
 
 @dataclass(frozen=True)
@@ -94,6 +103,135 @@ class TypeRepr:
         if k in ("named", "opaque"):
             return self.name or "?"
         return f"<{k}>"
+
+    # -- unified type interpretation ------------------------------------------
+    #
+    # A ``TypeRepr`` is the single source of truth for a Lean type's Python
+    # face. From it we derive both the *static* annotation (used by the stub
+    # generator) and a *runtime* predicate over Python values (used for
+    # argument validation). This mirrors nerodia's ``Typing = Py.Raw → Prop``,
+    # where one description drives static hints and runtime checks alike —
+    # adapted to lean.py's registry-driven design.
+
+    def python_annotation(
+        self, known_types: set[str] | None = None, named_prefix: str = ""
+    ) -> str:
+        """Render this type as a Python type-annotation string.
+
+        ``known_types`` is the set of derived-type short names the caller has
+        classes for; a ``named`` reference resolves to ``named_prefix + short``
+        when known, else ``Any``. When ``known_types`` is ``None``, every named
+        type is assumed present (used for diagnostics).
+        """
+        def rec(x: TypeRepr) -> str:
+            return x.python_annotation(known_types, named_prefix)
+
+        k = self.kind
+        if k == "unit":
+            return "None"
+        if k == "bool":
+            return "bool"
+        if k in ("nat", "int", "uint", "sint"):
+            return "int"
+        if k == "char":
+            return "str"
+        if k in ("float", "float32"):
+            return "float"
+        if k == "string":
+            return "str"
+        if k == "pyobject":
+            return "Any"
+        if k in ("array", "list"):
+            return f"list[{rec(self.elem)}]" if self.elem else "list[Any]"
+        if k == "option":
+            return f"{rec(self.elem)} | None" if self.elem else "Any | None"
+        if k == "prod":
+            return f"tuple[{rec(self.a)}, {rec(self.b)}]"
+        if k == "sum":
+            return f"{rec(self.a)} | {rec(self.b)}"
+        if k == "io":
+            return rec(self.elem) if self.elem else "None"
+        if k == "except":
+            return rec(self.a) if self.a else "Any"
+        if k in ("named", "opaque"):
+            short = py_ident(self.name) if self.name else ""
+            if not short:
+                return "Any"
+            if known_types is None or short in known_types:
+                return f"{named_prefix}{short}"
+            return "Any"
+        return "Any"
+
+    def matches(self, value: Any) -> bool:
+        """Return True if ``value`` is a plausible Python value for this type.
+
+        The runtime half of the unified interpretation: a structural predicate
+        used to validate arguments before marshalling. Scalars and containers
+        are checked precisely; ``named`` types are checked by identity when the
+        value is a Lean inductive value and accepted leniently otherwise (the
+        marshaller also accepts tuple/constructor spellings)."""
+        k = self.kind
+        if k == "unit":
+            return value is None
+        if k == "bool":
+            return isinstance(value, bool)
+        if k == "nat":
+            return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        if k in ("int", "sint"):
+            return isinstance(value, int) and not isinstance(value, bool)
+        if k == "uint":
+            return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        if k in ("float", "float32"):
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        if k == "char":
+            return isinstance(value, str) and len(value) == 1
+        if k == "string":
+            return isinstance(value, str)
+        if k == "pyobject":
+            return True
+        if k in ("array", "list"):
+            if not isinstance(value, (list, tuple)):
+                return False
+            return self.elem is None or all(self.elem.matches(v) for v in value)
+        if k == "option":
+            return value is None or (self.elem is not None and self.elem.matches(value))
+        if k == "prod":
+            return (
+                isinstance(value, tuple)
+                and len(value) == 2
+                and self.a is not None and self.a.matches(value[0])
+                and self.b is not None and self.b.matches(value[1])
+            )
+        if k == "sum":
+            return (self.a is not None and self.a.matches(value)) or (
+                self.b is not None and self.b.matches(value)
+            )
+        if k == "io":
+            return self.elem is None or self.elem.matches(value)
+        if k == "except":
+            return self.a is None or self.a.matches(value)
+        if k in ("named", "opaque"):
+            return self._matches_named(value)
+        return True
+
+    def _matches_named(self, value: Any) -> bool:
+        # A Lean inductive value/constructor carries its own type name; if so,
+        # require it to match. Anything else (tuple spellings, opaque handles)
+        # is accepted leniently.
+        type_name = getattr(value, "_type_name", None)
+        if type_name is None:
+            type_name = getattr(type(value), "_type_name", None)
+        if type_name is None:
+            return True
+        return self.name is None or py_ident(type_name) == py_ident(self.name)
+
+    def check(self, value: Any, name: str = "value") -> None:
+        """Raise ``TypeError`` if ``value`` does not match this type."""
+        if not self.matches(value):
+            raise TypeError(
+                f"{name}: expected a value of Lean type `{self.short()}` "
+                f"(Python {self.python_annotation()}), got {type(value).__name__} {value!r}"
+            )
 
 
 @dataclass(frozen=True)

@@ -44,8 +44,22 @@ def lean_prefix() -> Path:
     return Path(run_command(["lean", "--print-prefix"]))
 
 
+def bundle_dir() -> Path | None:
+    """Directory of a self-contained library bundle, if one is active.
+
+    When ``LEANPY_BUNDLE_DIR`` is set (e.g. by a wheel-installed library's
+    loader), the Lean runtime shared libraries and the user dylib have been
+    vendored and relocated there, so we can resolve everything without an
+    installed toolchain. See :mod:`lean_py.packaging`.
+    """
+    d = os.environ.get("LEANPY_BUNDLE_DIR")
+    return Path(d) if d else None
+
+
 def lean_lib_dir() -> Path:
     """Where Lean's own shared libraries live."""
+    if b := bundle_dir():
+        return b
     return lean_prefix() / "lib" / "lean"
 
 
@@ -75,6 +89,9 @@ def find_lean_dynlib() -> Path:
     lib = lean_lib_dir() / f"libleanshared{ext}"
     if lib.exists():
         return lib
+    if bundle_dir():
+        # In a bundle we must not fall through to a toolchain lookup.
+        raise RuntimeError(f"libleanshared{ext} not found in bundle {lean_lib_dir()}")
     # Fallback: scan LEAN_PATH (less reliable, retained for back-compat).
     try:
         out = run_command(["lake", "env", "printenv", "LEAN_PATH"])

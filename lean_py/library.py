@@ -76,6 +76,12 @@ def _ensure_rpath(dylib: Path) -> None:
     """
     if sys.platform != "darwin":
         return
+    from lean_py.utils import bundle_dir
+
+    if bundle_dir() is not None:
+        # A bundled dylib is already relocated to `@loader_path`; leave it be
+        # (and avoid a toolchain lookup that would fail without elan).
+        return
     libdir = lean_lib_dir()
     try:
         out = subprocess.run(
@@ -181,6 +187,24 @@ class _StructureType(_InductiveType):
         return LeanInductiveValue(self._ti.name, self._ctor.name, self._ctor.tag, tuple(args))
 
 
+# Optional runtime validation of arguments against their Lean `TypeRepr`.
+# Off by default (the marshaller is intentionally lenient); enable it for
+# clearer errors during development. See `set_argument_typechecking`.
+_argument_typechecking = False
+
+
+def set_argument_typechecking(enabled: bool) -> None:
+    """Enable/disable runtime validation of arguments to `@[python]` functions.
+
+    When enabled, each argument is checked against the same `TypeRepr` that
+    drives marshalling (:meth:`lean_py.registry.TypeRepr.check`), raising a
+    clear ``TypeError`` before the value crosses the FFI boundary. Applies to
+    functions bound after — and calls made while — it is enabled.
+    """
+    global _argument_typechecking
+    _argument_typechecking = bool(enabled)
+
+
 # ============================================================================
 # Generated function wrappers
 # ============================================================================
@@ -237,9 +261,16 @@ def _build_callable(lib: ctypes.CDLL, finfo: FuncInfo, marshaller: Marshaller) -
 
     _ffi = get_lean_ffi()
 
+    params = finfo.params
+
     def _wrapper(*args):
         if len(args) != len(pwraps):
             raise TypeError(f"{finfo.exportName}: expected {len(pwraps)} args, got {len(args)}")
+        if _argument_typechecking:
+            # Validate against the same TypeRepr that drives marshalling,
+            # for a clear error before the value reaches the FFI boundary.
+            for i, (p, a) in enumerate(zip(params, args)):
+                p.check(a, name=f"{finfo.declName.split('.')[-1]} arg {i}")
         cargs = []
         for w, a in zip(pwraps, args):
             v = w.to_lean(a)
@@ -504,9 +535,9 @@ class LeanLibrary:
         result = init_fn(1, ctypes.cast(c_void_p(1), POINTER(LeanObject)))
         if result.contents.m_tag != 0:
             self.ffi.io_result_show_error(result)
-            self.ffi.dec_ref(result)
+            self.ffi.lean_dec(result)
             raise RuntimeError(f"{init_name} failed")
-        self.ffi.dec_ref(result)
+        self.ffi.lean_dec(result)
         # The user library's `initialize_*` block has now run all its
         # `initialize` declarations. Flip the runtime's global init
         # flag so subsequent calls (e.g. frontend operations that
@@ -539,7 +570,7 @@ class LeanLibrary:
             raw = cstr.value if isinstance(cstr, ctypes.c_char_p) else cstr
             return (raw or b"").decode("utf-8")
         finally:
-            self.ffi.dec_ref(result_ptr)
+            self.ffi.lean_dec(result_ptr)
 
     # -- public -----------------------------------------------------------
 
@@ -549,6 +580,21 @@ class LeanLibrary:
         if key in self._types:
             return self._types[key]
         raise KeyError(key)
+
+    def generate_stub(self) -> str:
+        """Return a ``.pyi`` type stub describing this library's surface."""
+        from lean_py.stubgen import generate_stub_for_library
+
+        return generate_stub_for_library(self)
+
+    def write_stub(self, path: str | os.PathLike | None = None) -> str:
+        """Write a ``.pyi`` stub for this library and return the path written.
+
+        Defaults to ``<name>.pyi`` in the current directory.
+        """
+        out = Path(path) if path is not None else Path(f"{self.name}.pyi")
+        out.write_text(self.generate_stub(), encoding="utf-8")
+        return str(out)
 
     def __repr__(self) -> str:
         return f"<LeanLibrary {self.name!r} funcs={len(self._funcs)} types={len(self._types)}>"
