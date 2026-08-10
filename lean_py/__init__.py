@@ -22,7 +22,7 @@ structural pattern matching::
 
 from lean_py.exceptions import LeanError, LeanPyCallbackError
 from lean_py.kernel import GoalState, Kernel, TacticResult
-from lean_py.library import LeanLibrary, Library
+from lean_py.library import LeanLibrary, Library, set_argument_typechecking
 from lean_py.marshal import LeanInductiveValue, LeanObj, Marshaller
 from lean_py.registry import (
     CtorInfo,
@@ -31,6 +31,7 @@ from lean_py.registry import (
     TypeInfo,
     TypeRepr,
 )
+from lean_py.stubgen import generate_stub
 
 __all__ = [
     "LeanLibrary",
@@ -48,4 +49,6 @@ __all__ = [
     "Kernel",
     "GoalState",
     "TacticResult",
+    "generate_stub",
+    "set_argument_typechecking",
 ]

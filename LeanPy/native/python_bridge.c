@@ -442,29 +442,38 @@ LEAN_EXPORT lean_obj_res lean_py_is_initialized(lean_obj_arg unit, lean_obj_arg 
         }                                                              \
     } while (0)
 
-/* Acquire the GIL for the duration of a Python C API call. The macro
- * declares a `_gil_state` variable and releases it on `WITH_GIL_END`. */
-#define WITH_GIL_BEGIN() \
-    PyGILState_STATE _gil_state = p_PyGILState_Ensure();
-#define WITH_GIL_END() \
-    p_PyGILState_Release(_gil_state);
+/* Acquire the GIL for the duration of a Python C API call, releasing it
+ * automatically on scope exit so every return path is covered. `WITH_GIL()`
+ * is placed once at the top of each entry point that touches the CPython
+ * C API. PyGILState_Ensure is reentrant: when the calling thread already
+ * holds the GIL — the common case, since `LeanLibrary` loads the bridge via
+ * ctypes `PyDLL` — this is a cheap no-op. It becomes load-bearing when the
+ * bridge is entered *without* the GIL held: a foreign thread created by
+ * Lean, a free-threaded build, or a `CDLL`-loaded library. */
+static inline void _leanpy_gil_release(PyGILState_STATE *st) {
+    p_PyGILState_Release(*st);
+}
+#define WITH_GIL()                                                     \
+    PyGILState_STATE _gil_state                                        \
+        __attribute__((cleanup(_leanpy_gil_release)))                  \
+        = p_PyGILState_Ensure()
 
 /* ------------------------------------------------------------------ */
 /*  Singletons                                                         */
 /* ------------------------------------------------------------------ */
 
 LEAN_EXPORT lean_obj_res lean_py_none(lean_obj_arg unit, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     p_Py_IncRef(p_Py_None);
     return lean_io_result_mk_ok(wrap_pyobject(p_Py_None));
 }
 LEAN_EXPORT lean_obj_res lean_py_true(lean_obj_arg unit, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     p_Py_IncRef(p_Py_True);
     return lean_io_result_mk_ok(wrap_pyobject(p_Py_True));
 }
 LEAN_EXPORT lean_obj_res lean_py_false(lean_obj_arg unit, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     p_Py_IncRef(p_Py_False);
     return lean_io_result_mk_ok(wrap_pyobject(p_Py_False));
 }
@@ -474,7 +483,7 @@ LEAN_EXPORT lean_obj_res lean_py_false(lean_obj_arg unit, lean_obj_arg world) {
 /* ------------------------------------------------------------------ */
 
 LEAN_EXPORT lean_obj_res lean_py_of_bool(uint8_t b, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     return ok_owned_or_err(p_PyBool_FromLong(b ? 1 : 0));
 }
 
@@ -482,7 +491,7 @@ LEAN_EXPORT lean_obj_res lean_py_of_bool(uint8_t b, lean_obj_arg world) {
  * support the int64 range and error otherwise; this is what 99% of API
  * surface needs. Callers needing arbitrary precision can stringify. */
 LEAN_EXPORT lean_obj_res lean_py_of_int64(b_lean_obj_arg n, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     long long v;
     if (lean_is_scalar(n)) {
         v = (long long) lean_scalar_to_int64(n);
@@ -494,26 +503,26 @@ LEAN_EXPORT lean_obj_res lean_py_of_int64(b_lean_obj_arg n, lean_obj_arg world) 
 }
 
 LEAN_EXPORT lean_obj_res lean_py_of_float(double f, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     return ok_owned_or_err(p_PyFloat_FromDouble(f));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_of_string(b_lean_obj_arg s, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     const char *cs = lean_string_cstr(s);
     size_t n = lean_string_size(s) - 1; /* size includes terminating NUL */
     return ok_owned_or_err(p_PyUnicode_DecodeUTF8(cs, (Py_ssize_t)n, NULL));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_of_bytes(b_lean_obj_arg ba, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     Py_ssize_t n = (Py_ssize_t) lean_sarray_size(ba);
     const char *p = (const char *) lean_sarray_cptr(ba);
     return ok_owned_or_err(p_PyBytes_FromStringAndSize(p, n));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_of_list(b_lean_obj_arg arr, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     size_t n = lean_array_size(arr);
     PyObject *list = p_PyList_New((Py_ssize_t)n);
     if (!list) return raise_py_error();
@@ -527,7 +536,7 @@ LEAN_EXPORT lean_obj_res lean_py_of_list(b_lean_obj_arg arr, lean_obj_arg world)
 }
 
 LEAN_EXPORT lean_obj_res lean_py_of_tuple(b_lean_obj_arg arr, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     size_t n = lean_array_size(arr);
     PyObject *tup = p_PyTuple_New((Py_ssize_t)n);
     if (!tup) return raise_py_error();
@@ -541,7 +550,7 @@ LEAN_EXPORT lean_obj_res lean_py_of_tuple(b_lean_obj_arg arr, lean_obj_arg world
 }
 
 LEAN_EXPORT lean_obj_res lean_py_of_dict(b_lean_obj_arg arr, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     PyObject *d = p_PyDict_New();
     if (!d) return raise_py_error();
     size_t n = lean_array_size(arr);
@@ -565,21 +574,21 @@ LEAN_EXPORT lean_obj_res lean_py_of_dict(b_lean_obj_arg arr, lean_obj_arg world)
 /* ------------------------------------------------------------------ */
 
 LEAN_EXPORT lean_obj_res lean_py_to_bool(b_lean_obj_arg p, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     int r = p_PyObject_IsTrue(unwrap_pyobject(p));
     if (r < 0) return raise_py_error();
     return lean_io_result_mk_ok(lean_box(r ? 1 : 0));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_to_int64(b_lean_obj_arg p, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     long long v = p_PyLong_AsLongLong(unwrap_pyobject(p));
     if (v == -1 && p_PyErr_Occurred()) return raise_py_error();
     return lean_io_result_mk_ok(lean_int64_to_int((int64_t) v));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_to_float(b_lean_obj_arg p, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     double d = p_PyFloat_AsDouble(unwrap_pyobject(p));
     if (d == -1.0 && p_PyErr_Occurred()) return raise_py_error();
     return lean_io_result_mk_ok(lean_box_float(d));
@@ -598,22 +607,22 @@ static lean_object *py_obj_to_lean_string(PyObject *s) {
 }
 
 LEAN_EXPORT lean_obj_res lean_py_to_string(b_lean_obj_arg p, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     return py_obj_to_lean_string(p_PyObject_Str(unwrap_pyobject(p)));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_repr(b_lean_obj_arg p, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     return py_obj_to_lean_string(p_PyObject_Repr(unwrap_pyobject(p)));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_str(b_lean_obj_arg p, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     return py_obj_to_lean_string(p_PyObject_Str(unwrap_pyobject(p)));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_type_name(b_lean_obj_arg p, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     PyObject *ty = p_PyObject_Type(unwrap_pyobject(p));
     if (!ty) return raise_py_error();
     PyObject *nm = p_PyObject_GetAttrString(ty, "__name__");
@@ -626,51 +635,51 @@ LEAN_EXPORT lean_obj_res lean_py_type_name(b_lean_obj_arg p, lean_obj_arg world)
 /* ------------------------------------------------------------------ */
 
 LEAN_EXPORT lean_obj_res lean_py_getattr(b_lean_obj_arg p, b_lean_obj_arg name, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     return ok_owned_or_err(p_PyObject_GetAttrString(unwrap_pyobject(p), lean_string_cstr(name)));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_setattr(b_lean_obj_arg p, b_lean_obj_arg name, b_lean_obj_arg v, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     int r = p_PyObject_SetAttrString(unwrap_pyobject(p), lean_string_cstr(name), unwrap_pyobject(v));
     if (r != 0) return raise_py_error();
     return lean_io_result_mk_ok(lean_box(0));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_hasattr(b_lean_obj_arg p, b_lean_obj_arg name, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     int r = p_PyObject_HasAttrString(unwrap_pyobject(p), lean_string_cstr(name));
     return lean_io_result_mk_ok(lean_box(r ? 1 : 0));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_getitem(b_lean_obj_arg p, b_lean_obj_arg k, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     return ok_owned_or_err(p_PyObject_GetItem(unwrap_pyobject(p), unwrap_pyobject(k)));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_setitem(b_lean_obj_arg p, b_lean_obj_arg k, b_lean_obj_arg v, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     int r = p_PyObject_SetItem(unwrap_pyobject(p), unwrap_pyobject(k), unwrap_pyobject(v));
     if (r != 0) return raise_py_error();
     return lean_io_result_mk_ok(lean_box(0));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_length(b_lean_obj_arg p, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     Py_ssize_t r = p_PyObject_Length(unwrap_pyobject(p));
     if (r < 0) return raise_py_error();
     return lean_io_result_mk_ok(lean_int64_to_int((int64_t) r));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_eq(b_lean_obj_arg a, b_lean_obj_arg b, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     int r = p_PyObject_RichCompareBool(unwrap_pyobject(a), unwrap_pyobject(b), Py_EQ);
     if (r < 0) return raise_py_error();
     return lean_io_result_mk_ok(lean_box(r ? 1 : 0));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_is(b_lean_obj_arg a, b_lean_obj_arg b, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     return lean_io_result_mk_ok(lean_box(unwrap_pyobject(a) == unwrap_pyobject(b) ? 1 : 0));
 }
 
@@ -679,7 +688,7 @@ LEAN_EXPORT lean_obj_res lean_py_is(b_lean_obj_arg a, b_lean_obj_arg b, lean_obj
 /* ------------------------------------------------------------------ */
 
 LEAN_EXPORT lean_obj_res lean_py_call(b_lean_obj_arg f, b_lean_obj_arg args, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     size_t n = lean_array_size(args);
     PyObject *tup = p_PyTuple_New((Py_ssize_t)n);
     if (!tup) return raise_py_error();
@@ -694,7 +703,7 @@ LEAN_EXPORT lean_obj_res lean_py_call(b_lean_obj_arg f, b_lean_obj_arg args, lea
 }
 
 LEAN_EXPORT lean_obj_res lean_py_call_kw(b_lean_obj_arg f, b_lean_obj_arg args, b_lean_obj_arg kwargs, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     size_t n = lean_array_size(args);
     PyObject *tup = p_PyTuple_New((Py_ssize_t)n);
     if (!tup) return raise_py_error();
@@ -726,7 +735,7 @@ LEAN_EXPORT lean_obj_res lean_py_call_kw(b_lean_obj_arg f, b_lean_obj_arg args, 
 /* ------------------------------------------------------------------ */
 
 LEAN_EXPORT lean_obj_res lean_py_import(b_lean_obj_arg name, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     return ok_owned_or_err(p_PyImport_ImportModule(lean_string_cstr(name)));
 }
 
@@ -737,7 +746,7 @@ static PyObject *get_main_globals(void) {
 }
 
 LEAN_EXPORT lean_obj_res lean_py_eval(b_lean_obj_arg src, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     PyObject *g = get_main_globals();
     if (!g) return raise_py_error();
     PyObject *r = p_PyRun_StringFlags(lean_string_cstr(src), Py_eval_input, g, g, NULL);
@@ -745,7 +754,7 @@ LEAN_EXPORT lean_obj_res lean_py_eval(b_lean_obj_arg src, lean_obj_arg world) {
 }
 
 LEAN_EXPORT lean_obj_res lean_py_exec(b_lean_obj_arg src, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     PyObject *g = get_main_globals();
     if (!g) return raise_py_error();
     PyObject *r = p_PyRun_StringFlags(lean_string_cstr(src), Py_file_input, g, g, NULL);
@@ -760,7 +769,7 @@ LEAN_EXPORT lean_obj_res lean_py_exec(b_lean_obj_arg src, lean_obj_arg world) {
 
 #define BINOP(name, fn)                                                 \
 LEAN_EXPORT lean_obj_res name(b_lean_obj_arg a, b_lean_obj_arg b, lean_obj_arg world) { \
-    (void)world; ENSURE_INIT();                                         \
+    (void)world; ENSURE_INIT(); WITH_GIL();                                         \
     return ok_owned_or_err(fn(unwrap_pyobject(a), unwrap_pyobject(b))); \
 }
 
@@ -770,13 +779,13 @@ BINOP(lean_py_mul, p_PyNumber_Multiply)
 BINOP(lean_py_div, p_PyNumber_TrueDivide)
 
 LEAN_EXPORT lean_obj_res lean_py_pow(b_lean_obj_arg a, b_lean_obj_arg b, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     /* PyNumber_Power borrows all three arguments; no IncRef needed. */
     return ok_owned_or_err(p_PyNumber_Power(unwrap_pyobject(a), unwrap_pyobject(b), p_Py_None));
 }
 
 LEAN_EXPORT lean_obj_res lean_py_neg(b_lean_obj_arg a, lean_obj_arg world) {
-    (void)world; ENSURE_INIT();
+    (void)world; ENSURE_INIT(); WITH_GIL();
     return ok_owned_or_err(p_PyNumber_Negative(unwrap_pyobject(a)));
 }
 
@@ -846,8 +855,7 @@ static void format_lean_io_error(lean_object *err, char *buf, size_t bufsz) {
         snprintf(buf, bufsz, "Lean error (no payload)");
         return;
     }
-    /* Most IO.Error variants have a String at field 0. userError is
-     * tag 18, payload (msg : String). */
+    /* Most IO.Error variants (e.g. userError) carry a String at field 0. */
     if (lean_is_scalar(err)) {
         snprintf(buf, bufsz, "Lean IO.Error (tag %u, no payload)",
                  (unsigned)lean_unbox(err));
@@ -856,7 +864,7 @@ static void format_lean_io_error(lean_object *err, char *buf, size_t bufsz) {
     unsigned tag = lean_ptr_tag(err);
     /* lean_ctor_get returns a borrowed pointer */
     lean_object *fld = lean_ctor_get(err, 0);
-    if (fld && !lean_is_scalar(fld) && lean_ptr_tag(fld) == 249 /* string tag */) {
+    if (fld && !lean_is_scalar(fld) && lean_is_string(fld)) {
         snprintf(buf, bufsz, "%s", lean_string_cstr(fld));
         return;
     }
@@ -1175,7 +1183,7 @@ static PyObject *get_lean_obj_handle_type(void) {
  */
 LEAN_EXPORT lean_obj_res lean_py_of_lean_obj(b_lean_obj_arg obj, lean_obj_arg world) {
     (void)world;
-    ENSURE_INIT();
+    ENSURE_INIT(); WITH_GIL();
 
     PyObject *type = get_lean_obj_handle_type();
     if (!type) return raise_io_error("LeanPy: failed to create LeanObjHandle type");
@@ -1200,7 +1208,7 @@ LEAN_EXPORT lean_obj_res lean_py_of_lean_obj(b_lean_obj_arg obj, lean_obj_arg wo
  */
 LEAN_EXPORT lean_obj_res lean_py_to_lean_obj(b_lean_obj_arg py_ext, lean_obj_arg world) {
     (void)world;
-    ENSURE_INIT();
+    ENSURE_INIT(); WITH_GIL();
 
     if (!lean_is_external(py_ext)) {
         /* Return none */

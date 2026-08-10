@@ -1,6 +1,7 @@
 """Parse lean.h and extract declarations for runtime binding."""
 
 import hashlib
+import os
 import pickle
 import re
 import subprocess
@@ -75,7 +76,16 @@ def find_lean_header() -> Path:
          install picked the toolchain.
       2. Fall back to constructing the elan path from the project's
          `lean-toolchain` file, for callers who don't have `lean` on PATH.
+
+    A ``LEANPY_BUNDLE_DIR`` bundle ships its own ``lean.h`` so a
+    wheel-installed library can build its ctypes bindings without a toolchain.
     """
+    bundle = os.environ.get("LEANPY_BUNDLE_DIR")
+    if bundle:
+        for cand in (Path(bundle) / "lean.h", Path(bundle) / "include" / "lean" / "lean.h"):
+            if cand.exists():
+                return cand
+
     try:
         prefix = subprocess.check_output(["lean", "--print-prefix"], text=True).strip()
         header = Path(prefix) / "include" / "lean" / "lean.h"

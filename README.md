@@ -333,6 +333,80 @@ objects:
 lib.makeList123(None)   # [1, 2, 3]  (not an opaque handle)
 ```
 
+## Type stubs
+
+A `LeanLibrary` exposes its functions and types dynamically, so editors and
+type-checkers see only `Any`. Generate a `.pyi` stub from the same registry
+that drives marshalling — one source of truth for runtime conversion *and*
+static types:
+
+```bash
+python -m lean_py.stubgen path/to/project MyLib -o MyLib.pyi
+```
+
+or at runtime:
+
+```python
+lib = LeanLibrary.from_lake("path/to/project", "MyLib", build=True)
+lib.write_stub("MyLib.pyi")
+```
+
+The stub declares a `MyLibLibrary(LeanLibrary)` subclass with typed methods
+(`def add(self, a0: int, a1: int, /) -> int: ...`) and one class per derived
+type, including per-constructor classes for pattern matching. Annotate the
+`from_lake` result to opt in:
+
+```python
+from MyLib import MyLibLibrary  # the generated stub
+lib: MyLibLibrary = LeanLibrary.from_lake("path/to/project", "MyLib")  # type: ignore[assignment]
+lib.add(3, 4)          # checked: (int, int) -> int
+```
+
+Parameter *names* are not in the registry yet, so parameters are positional
+(`a0, a1, ...`), matching the runtime wrappers, which reject keyword arguments.
+
+The stub annotations come from the same `TypeRepr` that drives marshalling, so
+they can't drift from runtime behaviour. That representation also backs an
+optional runtime check — one description, static hints and value validation
+alike:
+
+```python
+from lean_py import set_argument_typechecking
+
+set_argument_typechecking(True)
+lib.add(3, "four")     # TypeError: add arg 1: expected `Int` (int), got str 'four'
+```
+
+It is off by default (the marshaller is deliberately lenient); enable it while
+developing for clearer errors before values cross the FFI boundary.
+
+## Distribution: self-contained wheels
+
+By default a `LeanLibrary` discovers the Lean runtime from the active toolchain
+(`lean --print-prefix`), so every user needs elan installed. To ship a library
+that installs with **no toolchain**, bundle the dylib together with its Lean
+runtime dependency closure into a wheel:
+
+```bash
+python -m lean_py.packaging build path/to/project MyLib --version 0.1.0 -o dist/
+```
+
+The bundler vendors the dylib, the Lean runtime shared libraries, and `lean.h`
+into the wheel, and rewrites their install names / RPATHs so they resolve each
+other via `@loader_path` (macOS) or `$ORIGIN` (Linux). The wheel ships a loader:
+
+```python
+from mylib import load          # the bundled package
+lib = load()                    # a ready LeanLibrary, no elan required
+lib.myFunction(42)
+```
+
+Because lean.py binds through **ctypes** rather than a CPython C-extension, the
+wheel is ABI-independent and tagged `py3-none-<platform>` — the only
+platform-specific content is the vendored dylibs. (This is the analogue of
+nerodia's `abi3` wheels; lean.py needs no Python-ABI tag at all.) Bundling
+requires `install_name_tool`/`codesign` on macOS or `patchelf` on Linux.
+
 ## Exceptions
 
 Errors carry type information across the boundary:
@@ -372,10 +446,10 @@ cd tests/lean && lake build TestLib:shared && cd ../..
 uv run pytest tests -v
 ```
 
-125 tests covering: FFI primitives, all marshalled types, typed
-exceptions, bidirectional introspection, kernel facade (goal state,
-tactics, environment, elaboration, frontend, serialisation), Python-in-Lean
-demos, and refcount stress tests.
+1300+ tests across 17 files covering: FFI primitives, all marshalled
+types, typed exceptions, bidirectional introspection, kernel facade (goal
+state, tactics, environment, elaboration, frontend, serialisation),
+Python-in-Lean demos, the z3py-compatible layer, and refcount stress tests.
 
 ## How it works
 

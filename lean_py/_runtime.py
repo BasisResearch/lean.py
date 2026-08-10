@@ -699,32 +699,11 @@ def _add_helper_methods(class_dict: dict, structs: dict):
             s = s.encode("utf-8")
         return self.lean_mk_string(s)
 
-    def inc_ref(self, obj):
-        """Increment reference counter."""
-        if self.lean_is_st(obj):
-            obj.contents.m_rc += 1
-
-    def dec_ref(self, obj):
-        """Decrement reference counter."""
-        if self.lean_is_st(obj):
-            obj.contents.m_rc -= 1
-            if obj.contents.m_rc == 0:
-                self.lean_free_object(obj)
-        elif obj.contents.m_rc != 0:
-            self.lean_dec_ref_cold(obj)
-
-    def io_result_is_ok(self, res) -> bool:
-        """Check if an IO result is Ok (tag == 0)."""
-        return res.contents.m_tag == 0
-
     def io_result_show_error(self, res):
         """Display an IO error result."""
         self.lean_io_result_show_error(res)
 
     class_dict["mk_string"] = mk_string
-    class_dict["inc_ref"] = inc_ref
-    class_dict["dec_ref"] = dec_ref
-    class_dict["io_result_is_ok"] = io_result_is_ok
     class_dict["io_result_show_error"] = io_result_show_error
 
 
