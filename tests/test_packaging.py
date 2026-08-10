@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from lean_py.library import LeanLibrary
-from lean_py.packaging import bundle_native_libs, build_wheel
+from lean_py.packaging import build_wheel, bundle_native_libs
 
 TESTLEAN = Path(__file__).parent / "lean"
 
@@ -31,9 +31,7 @@ def _toolchainless_env(bundle_dir: Path) -> dict:
 
     env = dict(os.environ)
     # Drop elan / toolchain dirs from PATH.
-    env["PATH"] = ":".join(
-        p for p in env.get("PATH", "").split(":") if ".elan" not in p and p
-    )
+    env["PATH"] = ":".join(p for p in env.get("PATH", "").split(":") if ".elan" not in p and p)
     for var in ("DYLD_LIBRARY_PATH", "LD_LIBRARY_PATH", "LEANPY_LIBLEAN"):
         env.pop(var, None)
     env["LEANPY_BUNDLE_DIR"] = str(bundle_dir)
@@ -101,8 +99,12 @@ def test_installed_wheel_loads_without_toolchain(tmp_path):
     import os
 
     wheel = build_wheel(
-        TESTLEAN, "TestLib", version="0.1.0", out_dir=tmp_path,
-        package_name="testlib_bundled", build=True,
+        TESTLEAN,
+        "TestLib",
+        version="0.1.0",
+        out_dir=tmp_path,
+        package_name="testlib_bundled",
+        build=True,
     )
     target = tmp_path / "site"
     with zipfile.ZipFile(wheel) as zf:
@@ -119,7 +121,10 @@ print("WHEEL_OK")
     env = _toolchainless_env(libs_dir)
     env["PYTHONPATH"] = str(target) + os.pathsep + env.get("PYTHONPATH", "")
     res = subprocess.run(
-        [sys.executable, "-c", prog], env=env, capture_output=True, text=True,
+        [sys.executable, "-c", prog],
+        env=env,
+        capture_output=True,
+        text=True,
     )
     assert "WHEEL_OK" in res.stdout, (
         f"installed-wheel load failed\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"

@@ -113,9 +113,7 @@ class TypeRepr:
     # where one description drives static hints and runtime checks alike —
     # adapted to lean.py's registry-driven design.
 
-    def python_annotation(
-        self, known_types: set[str] | None = None, named_prefix: str = ""
-    ) -> str:
+    def python_annotation(self, known_types: set[str] | None = None, named_prefix: str = "") -> str:
         """Render this type as a Python type-annotation string.
 
         ``known_types`` is the set of derived-type short names the caller has
@@ -123,8 +121,9 @@ class TypeRepr:
         when known, else ``Any``. When ``known_types`` is ``None``, every named
         type is assumed present (used for diagnostics).
         """
-        def rec(x: TypeRepr) -> str:
-            return x.python_annotation(known_types, named_prefix)
+
+        def rec(x: TypeRepr | None) -> str:
+            return x.python_annotation(known_types, named_prefix) if x else "Any"
 
         k = self.kind
         if k == "unit":
@@ -199,8 +198,10 @@ class TypeRepr:
             return (
                 isinstance(value, tuple)
                 and len(value) == 2
-                and self.a is not None and self.a.matches(value[0])
-                and self.b is not None and self.b.matches(value[1])
+                and self.a is not None
+                and self.a.matches(value[0])
+                and self.b is not None
+                and self.b.matches(value[1])
             )
         if k == "sum":
             return (self.a is not None and self.a.matches(value)) or (

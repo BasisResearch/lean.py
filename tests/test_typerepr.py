@@ -12,6 +12,7 @@ def _t(kind, **kw):
 
 # --- static annotation (shared with the stub generator) -------------------
 
+
 def test_python_annotation_matches_stub_mapping():
     assert _t("unit").python_annotation() == "None"
     assert _t("nat").python_annotation() == "int"
@@ -29,13 +30,14 @@ def test_python_annotation_matches_stub_mapping():
 
 # --- runtime predicate ----------------------------------------------------
 
+
 def test_matches_scalars():
     assert _t("unit").matches(None)
     assert not _t("unit").matches(0)
     assert _t("bool").matches(True)
-    assert not _t("bool").matches(1)          # bool is not an int here
+    assert not _t("bool").matches(1)  # bool is not an int here
     assert _t("int").matches(5)
-    assert not _t("int").matches(True)        # and int is not a bool
+    assert not _t("int").matches(True)  # and int is not a bool
     assert _t("nat").matches(0)
     assert not _t("nat").matches(-1)
     assert _t("float").matches(3)
@@ -44,7 +46,7 @@ def test_matches_scalars():
     assert not _t("char").matches("ab")
     assert _t("string").matches("hello")
     assert not _t("string").matches(5)
-    assert _t("pyobject").matches(object())   # accepts anything
+    assert _t("pyobject").matches(object())  # accepts anything
 
 
 def test_matches_containers():
@@ -82,6 +84,7 @@ def test_check_raises_with_helpful_message():
 
 
 # --- opt-in end-to-end validation through a real library ------------------
+
 
 def test_argument_typechecking_toggle(example_lib):
     from lean_py import set_argument_typechecking

@@ -18,6 +18,7 @@ def _t(kind, **kw):
 
 # --- pure type-mapping unit tests (no Lean build required) ----------------
 
+
 def test_annotation_scalars():
     known: set[str] = set()
     assert _annotation(_t("unit"), known) == "None"
@@ -56,6 +57,7 @@ def test_annotation_named_resolution():
 
 
 # --- end-to-end generation over a synthetic registry ----------------------
+
 
 def _sample_registry() -> LibraryRegistry:
     point = TypeInfo(

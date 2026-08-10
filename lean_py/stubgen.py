@@ -29,7 +29,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from lean_py.registry import (
-    FuncInfo,
     LibraryRegistry,
     TypeInfo,
     TypeRepr,
@@ -67,18 +66,13 @@ def _annotation(t: TypeRepr, known_types: set[str], named_prefix: str = "") -> s
     return t.python_annotation(known_types, named_prefix)
 
 
-def _params(
-    fields: tuple[TypeRepr, ...], known_types: set[str], named_prefix: str = ""
-) -> str:
+def _params(fields: tuple[TypeRepr, ...], known_types: set[str], named_prefix: str = "") -> str:
     """Positional-only parameter list. The registry carries types but not
     names, so parameters are named ``a0, a1, ...`` and marked positional-only
     (``/``), matching the runtime wrappers, which reject keyword arguments."""
     if not fields:
         return ""
-    parts = [
-        f"a{i}: {_annotation(f, known_types, named_prefix)}"
-        for i, f in enumerate(fields)
-    ]
+    parts = [f"a{i}: {_annotation(f, known_types, named_prefix)}" for i, f in enumerate(fields)]
     return ", ".join(parts) + ", /"
 
 
@@ -208,24 +202,26 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("lake_dir", help="Path to the Lake project directory.")
     parser.add_argument("library_name", help="Lean library name (e.g. MyLib).")
     parser.add_argument(
-        "-o", "--output", default=None,
+        "-o",
+        "--output",
+        default=None,
         help="Output path (default: <library_name>.pyi in the current dir).",
     )
     parser.add_argument(
-        "--no-build", action="store_true",
+        "--no-build",
+        action="store_true",
         help="Do not run `lake build` before loading the library.",
     )
     args = parser.parse_args(argv)
 
-    lib = LeanLibrary.from_lake(
-        args.lake_dir, args.library_name, build=not args.no_build
-    )
+    lib = LeanLibrary.from_lake(args.lake_dir, args.library_name, build=not args.no_build)
     stub = generate_stub_for_library(lib)
     out_path = args.output or f"{args.library_name}.pyi"
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(stub)
-    print(f"Wrote {out_path} ({len(lib.registry.funcs)} functions, "
-          f"{len(lib.registry.types)} types).")
+    print(
+        f"Wrote {out_path} ({len(lib.registry.funcs)} functions, {len(lib.registry.types)} types)."
+    )
     return 0
 
 

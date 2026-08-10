@@ -44,6 +44,7 @@ _LIBS_SUBDIR = "_lean_libs"
 # Native-library relocation
 # ---------------------------------------------------------------------------
 
+
 def _run(args: list[str]) -> None:
     res = subprocess.run(args, capture_output=True, text=True)
     if res.returncode != 0:
@@ -103,8 +104,7 @@ def _relocate_macos(dest: Path, leaves: set[str]) -> None:
                 continue
             if dep.startswith("/"):
                 # Absolute toolchain path: rewrite to @loader_path (fits).
-                _run(["install_name_tool", "-change", dep,
-                      f"@loader_path/{leaf}", str(lib)])
+                _run(["install_name_tool", "-change", dep, f"@loader_path/{leaf}", str(lib)])
             else:
                 # @rpath/leaf (or similar): resolve via an @loader_path RPATH.
                 needs_rpath = True
@@ -152,7 +152,7 @@ class Bundle:
     """A relocated, self-contained set of native libraries."""
 
     dir: Path
-    main_lib: Path            # the user's library dylib inside the bundle
+    main_lib: Path  # the user's library dylib inside the bundle
     library_name: str
     runtime_libs: list[Path] = field(default_factory=list)
 
@@ -306,10 +306,7 @@ def build_wheel(
         "Requires-Dist: lean_py\n"
     )
     wheel_meta = (
-        "Wheel-Version: 1.0\n"
-        "Generator: lean_py.packaging\n"
-        "Root-Is-Purelib: false\n"
-        f"Tag: {tag}\n"
+        f"Wheel-Version: 1.0\nGenerator: lean_py.packaging\nRoot-Is-Purelib: false\nTag: {tag}\n"
     )
 
     # Assemble the zip and a RECORD.
