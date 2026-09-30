@@ -177,8 +177,8 @@ def declAxioms (name : String) : IO String := runCore do
   let n := name.toName
   if env.find? n |>.isNone then
     return ""
-  let (_, st) := ((CollectAxioms.collect n).run env).run {}
-  let names := st.axioms.toList.map toString |>.toArray.qsort
+  let axioms ← collectAxioms n
+  let names := axioms.map toString |>.qsort
   return "\n".intercalate names.toList
 
 /-! ## Elaboration -/
@@ -613,6 +613,10 @@ unsafe def envPickle (path : String) : IO String := do
 @[python "leanpy_kernel_env_unpickle"]
 unsafe def envUnpickle (path : String) : IO String := do
   try
+    -- Since Lean v4.34, `withImporting` clears the initializer-execution flag
+    -- after each import, so it must be re-enabled before the unpickler's
+    -- `importModules (loadExts := true)`.
+    Lean.enableInitializersExecution
     let (env, _region) ← environmentUnpickle (System.FilePath.mk path) none
     -- Note: dropping the CompactedRegion leaks memory; future work to
     -- thread that through to Python.
@@ -632,6 +636,10 @@ unsafe def goalPickle (state : GoalState) (path : String) : IO String := do
 @[python "leanpy_kernel_goal_unpickle"]
 unsafe def goalUnpickle (path : String) : IO (Option GoalState × String) := do
   try
+    -- Since Lean v4.34, `withImporting` clears the initializer-execution flag
+    -- after each import, so it must be re-enabled before the unpickler's
+    -- `importModules (loadExts := true)`.
+    Lean.enableInitializersExecution
     let (state, _region) ← goalStateUnpickle (System.FilePath.mk path) none
     return (some state, "")
   catch e => return (none, e.toString)
