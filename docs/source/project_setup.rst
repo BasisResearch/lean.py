@@ -34,7 +34,7 @@ Set the toolchain to match lean-py's pinned version:
 
 .. code-block:: bash
 
-   echo "leanprover/lean4:v4.29.1" > lean-toolchain
+   echo "leanprover/lean4:v4.34.1" > lean-toolchain
 
 Edit ``lakefile.toml``:
 

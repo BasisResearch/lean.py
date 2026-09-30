@@ -917,6 +917,9 @@ def z3AddInductive (desc : Z3InductiveDesc) : IO Unit := do
         }
         let decl := Declaration.inductDecl [] 0 [indType] false
         addDecl decl
+        -- Since Lean v4.34, the inductive must be compiled before the aux
+        -- constructions below (e.g. `ctorIdx`), mirroring `elabInductiveViews`.
+        compileDecls #[tName]
 
         -- Generate auxiliary declarations (casesOn, recOn, noConfusion, etc.)
         mkRecOn tName
