@@ -1,0 +1,12 @@
+name = "KernelBridge"
+defaultTargets = ["KernelBridge"]
+
+[[require]]
+name = "LeanPy"
+path = "../../.."
+
+[[lean_lib]]
+name = "KernelBridge"
+moreLinkObjs = ["LeanPy/LeanPy:static", "LeanPy/leanPyNative:static", "Pantograph/Pantograph:static"]
+precompileModules = true
+defaultFacets = ["shared"]

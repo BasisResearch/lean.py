@@ -247,9 +247,11 @@ def decideProp (src : String) : IO String := runCore do
         let expr ← Lean.instantiateMVars expr
         let dty ← Meta.mkAppM ``Decidable #[expr]
         let dec ← Meta.synthInstance dty
-        let r ← Meta.whnf dec
-        if r.isAppOf ``Decidable.isTrue then return "true"
-        else if r.isAppOf ``Decidable.isFalse then return "false"
+        -- Lean 4.35 represents Decidable as a structure containing a Bool.
+        -- isTrue/isFalse are abbreviations, not constructor heads.
+        let r ← Meta.whnf (mkApp2 (mkConst ``Decidable.decide) expr dec)
+        if r.isConstOf ``Bool.true then return "true"
+        else if r.isConstOf ``Bool.false then return "false"
         else return "<undecided>"
     catch e =>
       return s!"<elab: {← e.toMessageData.toString}>"
