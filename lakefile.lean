@@ -8,7 +8,7 @@ require Pantograph from git
   "https://github.com/leanprover/Pantograph.git" @ "dev"
 
 require Regex from git
-  "https://github.com/pandaman64/lean-regex.git" @ "v4.29.0" / "regex"
+  "https://github.com/pandaman64/lean-regex.git" @ "v4.34.0-rc1" / "regex"
 
 /-- Compile the Python-bridge C source against the active Lean toolchain. -/
 target pythonBridgeO pkg : FilePath := do
