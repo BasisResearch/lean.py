@@ -2,6 +2,13 @@
 
 Effortless interop between **Lean 4** and **Python**, in both directions.
 
+This branch targets Lean 4.35.0. Before each Lake project's first build, run
+`python3 scripts/prepare_lean435.py /path/to/project` from this checkout.
+It applies a checked proof-only workaround to the pinned Regex dependency;
+plain `lake build` currently fails without it. See the
+[kernel bridge example](examples/kernel/README.md) for importing an existing
+Mathlib project's compiled proofs from Python.
+
 * **Lean -> Python.** Annotate any Lean definition with `@[python "name"]`
   and call it from Python with automatic type marshalling.
   `derive_python` exposes inductives and structures as Python constructors.
@@ -441,7 +448,9 @@ Each is a self-contained Lake + uv project.
 
 ```bash
 uv sync --dev
+python3 scripts/prepare_lean435.py
 lake build
+python3 scripts/prepare_lean435.py tests/lean
 cd tests/lean && lake build TestLib:shared && cd ../..
 uv run pytest tests -v
 ```

@@ -5,7 +5,7 @@ package LeanPy where
   version := v!"0.1.0"
 
 require Pantograph from git
-  "https://github.com/leanprover/Pantograph.git" @ "dev"
+  "https://github.com/leanprover/Pantograph.git" @ "0789692d65e365c027d171074bf747f1d40328d0"
 
 require Regex from git
   "https://github.com/pandaman64/lean-regex.git" @ "v4.34.0-rc1" / "regex"

@@ -49,13 +49,17 @@ jobs:
         run: uv sync --dev
 
       - name: Install demo dependencies (sympy, numpy)
-        run: uv pip install sympy numpy
+        run: uv pip install sympy numpy "patchelf; sys_platform == 'linux'"
 
       - name: Build root Lake project
-        run: lake build
+        run: |
+          python3 scripts/prepare_lean435.py
+          lake build
 
       - name: Build TestLib (test fixture)
-        run: lake build TestLib:shared
+        run: |
+          python3 ../../scripts/prepare_lean435.py
+          lake build TestLib:shared
         working-directory: tests/lean
 
       - name: Inspect tests/lean build output (diagnostic)
@@ -99,10 +103,12 @@ jobs:
         uses: astral-sh/setup-uv@v5
       - run: uv python install 3.12
       - run: uv sync --dev
-      - run: uv pip install sympy numpy
+      - run: uv pip install sympy numpy "patchelf; sys_platform == 'linux'"
       - name: Build
         run: |
+          python3 scripts/prepare_lean435.py
           lake build
+          python3 scripts/prepare_lean435.py tests/lean
           (cd tests/lean && lake build)
       - name: leaks(1) check
         run: tests/leaks_check.sh
@@ -129,10 +135,12 @@ jobs:
         uses: astral-sh/setup-uv@v5
       - run: uv python install 3.12
       - run: uv sync --dev
-      - run: uv pip install sympy numpy
+      - run: uv pip install sympy numpy "patchelf; sys_platform == 'linux'"
       - name: Build
         run: |
+          python3 scripts/prepare_lean435.py
           lake build
+          python3 scripts/prepare_lean435.py tests/lean
           (cd tests/lean && lake build)
       - name: Run tests under ASAN (LD_PRELOAD)
         run: |
@@ -173,10 +181,12 @@ jobs:
         uses: astral-sh/setup-uv@v5
       - run: uv python install 3.12
       - run: uv sync --dev
-      - run: uv pip install sympy numpy
+      - run: uv pip install sympy numpy "patchelf; sys_platform == 'linux'"
       - name: Build
         run: |
+          python3 scripts/prepare_lean435.py
           lake build
+          python3 scripts/prepare_lean435.py tests/lean
           (cd tests/lean && lake build)
       - name: valgrind check
         run: tests/leaks_check.sh
