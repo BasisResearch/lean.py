@@ -36,7 +36,9 @@ from lean_py.marshal import LeanInductiveValue, Marshaller, TypeWrapper, _CtorMe
 from lean_py.registry import FuncInfo, LibraryRegistry, TypeInfo
 from lean_py.utils import (
     PREFIX_ENV,
+    bundle_dir,
     lean_lib_dir,
+    lean_prefix,
     pinned_toolchain,
     run_command,
     set_toolchain,
@@ -430,6 +432,11 @@ class LeanLibrary:
         self.path = Path(dylib_path)
         self.name = library_name
         self.ffi = get_lean_ffi()
+        # Lean code that asks for its sysroot (`Lean.findSysroot`, e.g. the
+        # kernel's `init_search`) runs `lean --print-prefix` from the cwd
+        # unless LEAN_SYSROOT is set: point it at the runtime just loaded.
+        if bundle_dir() is None:
+            os.environ.setdefault("LEAN_SYSROOT", str(lean_prefix()))
         # Ensure the dylib can resolve its @rpath references to Lean's runtime.
         _ensure_rpath(self.path)
         # Use `PyDLL` so that ctypes does NOT release the GIL when calling

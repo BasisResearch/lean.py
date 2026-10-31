@@ -134,15 +134,24 @@ def search (needle : String) : IO String := do
     return "\n".intercalate acc.qsort.toList
   | none => return ""
 
+/-- A declaration name from Python: escaped (`Foo.«a b»`, as `String.toName`
+reads it) or unescaped, as the kernel ops now return names (`Foo.a b`, split
+on dots). -/
+def parseName (s : String) : Name :=
+  let n := s.toName
+  if n.isAnonymous && !s.isEmpty then
+    (s.splitOn ".").foldl Name.str .anonymous
+  else n
+
 @[python "leanpy_kernel_decl_exists"]
 def declExists (name : String) : IO Bool := do
   match (← envRef.get) with
-  | some env => return (env.find? name.toName).isSome
+  | some env => return (env.find? (parseName name)).isSome
   | none => return false
 
 @[python "leanpy_kernel_decl_type"]
 def declType (name : String) : IO String := runCore do
-  let n := name.toName
+  let n := parseName name
   match (← getEnv).find? n with
   | none => return ""
   | some info =>
@@ -150,7 +159,7 @@ def declType (name : String) : IO String := runCore do
 
 @[python "leanpy_kernel_decl_value"]
 def declValue (name : String) : IO String := runCore do
-  let n := name.toName
+  let n := parseName name
   match (← getEnv).find? n with
   | none => return ""
   | some info =>
@@ -162,19 +171,19 @@ def declValue (name : String) : IO String := runCore do
 def moduleOfNameStr (name : String) : IO String := do
   match (← envRef.get) with
   | some env =>
-    match module_of_name env name.toName with
+    match module_of_name env (parseName name) with
     | some n => return n.toString (escape := false)
     | none   => return ""
   | none => return ""
 
 @[python "leanpy_kernel_is_internal_name_str"]
 def isInternalNameStr (name : String) : IO Bool :=
-  return isNameInternal name.toName
+  return isNameInternal (parseName name)
 
 @[python "leanpy_kernel_decl_axioms"]
 def declAxioms (name : String) : IO String := runCore do
   let env ← getEnv
-  let n := name.toName
+  let n := parseName name
   if env.find? n |>.isNone then
     return ""
   let axioms ← collectAxioms n

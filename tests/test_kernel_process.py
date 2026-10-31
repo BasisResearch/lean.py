@@ -109,6 +109,9 @@ def test_names_come_back_unescaped(kernel):
     assert r.ok
     assert r.constants == ["kp spaced"]
     assert "kp spaced" in kernel.search("kp spaced")
+    # and they read back, unescaped or escaped
+    assert kernel.decl_exists("kp spaced") and kernel.decl_exists("«kp spaced»")
+    assert "Nat" in kernel.decl_type("kp spaced")
     assert not any("«" in n for n in kernel.search("kp spaced"))
     out = kernel.process("def «kp other» : Nat := 1\n")
     assert out.strip() == "kp other"
@@ -148,3 +151,10 @@ def test_set_toolchain_reads_a_projects_toolchain_file(tmp_path, monkeypatch, fr
     utils.set_toolchain(tmp_path)
     assert utils.pinned_toolchain() == repo
     assert (utils.lean_prefix() / "include" / "lean" / "lean.h").exists()
+
+
+def test_the_kernel_finds_its_sysroot_from_any_cwd(example_lib, tmp_path, monkeypatch):
+    """init_search (Lean's findSysroot) works from a directory with no toolchain."""
+    assert os.environ.get("LEAN_SYSROOT") == str(utils.lean_prefix())
+    monkeypatch.chdir(tmp_path)
+    Kernel(example_lib).init_search("")
