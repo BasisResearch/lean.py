@@ -38,10 +38,65 @@ def lean_toolchain_version() -> str:
     return out
 
 
+PREFIX_ENV = "LEANPY_LEAN_PREFIX"
+"""An explicit toolchain sysroot (what ``lean --print-prefix`` prints)."""
+
+TOOLCHAIN_ENV = "LEANPY_TOOLCHAIN"
+"""An explicit toolchain, e.g. ``leanprover/lean4:v4.35.0``, for elan."""
+
+_pinned: str | None = None
+
+
+def toolchain_of(path: str | os.PathLike) -> str | None:
+    """The toolchain a ``lean-toolchain`` file names, given the file or the
+    directory holding it; ``None`` if there is none."""
+    p = Path(path)
+    f = p / "lean-toolchain" if p.is_dir() else p
+    return f.read_text().strip() if f.is_file() else None
+
+
+def set_toolchain(toolchain: str | os.PathLike | None) -> None:
+    """Pin the toolchain :func:`lean_prefix` resolves: a toolchain name, or a
+    ``lean-toolchain`` file or the directory holding one (``None`` unpins).
+
+    Takes effect for the runtime only if it has not been loaded yet (the
+    first :class:`~lean_py.LeanLibrary` loads it, and it cannot change in a
+    process)."""
+    global _pinned
+    if toolchain is None:
+        _pinned = None
+    else:
+        p = Path(toolchain)
+        _pinned = toolchain_of(p) if p.exists() else str(toolchain)
+    lean_prefix.cache_clear()
+
+
+def pinned_toolchain() -> str | None:
+    """The toolchain pinned by :func:`set_toolchain` or ``LEANPY_TOOLCHAIN``."""
+    return _pinned or os.environ.get(TOOLCHAIN_ENV) or None
+
+
 @lru_cache(maxsize=1)
 def lean_prefix() -> Path:
-    """Return the path printed by `lean --print-prefix`."""
-    return Path(run_command(["lean", "--print-prefix"]))
+    """The Lean toolchain's sysroot, independent of the current directory.
+
+    In order: ``LEANPY_LEAN_PREFIX``; the toolchain pinned by
+    :func:`set_toolchain` or ``LEANPY_TOOLCHAIN`` (or elan's own
+    ``ELAN_TOOLCHAIN``); lean.py's own ``lean-toolchain`` when it runs from a
+    checkout; else ``lean --print-prefix`` as elan resolves it from the
+    current directory (the old behaviour). A toolchain is resolved by
+    running ``lean --print-prefix`` with ``ELAN_TOOLCHAIN`` set, which elan
+    honours over any ``lean-toolchain`` file.
+    """
+    if explicit := os.environ.get(PREFIX_ENV):
+        return Path(explicit)
+    toolchain = (
+        pinned_toolchain()
+        or os.environ.get("ELAN_TOOLCHAIN")
+        or toolchain_of(Path(__file__).resolve().parent.parent)
+    )
+    env = None if toolchain is None else {**os.environ, "ELAN_TOOLCHAIN": toolchain}
+    return Path(run_command(["lean", "--print-prefix"], env=env))
 
 
 def bundle_dir() -> Path | None:

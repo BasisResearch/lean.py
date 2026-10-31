@@ -77,3 +77,9 @@ def test_registry_introspection(example_lib):
     assert "Point" in type_names
     assert "Color" in type_names
     assert "Shape" in type_names
+
+
+def test_top_level_float_passes_and_returns_by_value(example_lib):
+    """A Float parameter and result are raw doubles at the C ABI, not boxed."""
+    assert example_lib.py_float_affine(0.5, 3, [0.25, 1.0]) == 2.75
+    assert example_lib.py_float_affine(-1e300, 2, []) == -2e300

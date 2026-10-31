@@ -25,7 +25,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable
-from ctypes import POINTER, c_uint8, c_void_p
+from ctypes import POINTER, c_double, c_uint8, c_void_p
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +34,17 @@ from lean_py.base_types import LeanObject
 from lean_py.lean_ffi import get_lean_ffi
 from lean_py.marshal import LeanInductiveValue, Marshaller, TypeWrapper, _CtorMeta
 from lean_py.registry import FuncInfo, LibraryRegistry, TypeInfo
-from lean_py.utils import lean_lib_dir, run_command, shared_lib_extension
+from lean_py.utils import (
+    PREFIX_ENV,
+    bundle_dir,
+    lean_lib_dir,
+    lean_prefix,
+    pinned_toolchain,
+    run_command,
+    set_toolchain,
+    shared_lib_extension,
+    toolchain_of,
+)
 
 
 def _list_init_symbols(dylib: Path) -> list[str]:
@@ -277,6 +287,10 @@ def _build_callable(lib: ctypes.CDLL, finfo: FuncInfo, marshaller: Marshaller) -
             if isinstance(w.ctype, type) and issubclass(w.ctype, ctypes._Pointer):
                 # Convert pointer args to raw pointer values to match cfn.argtypes.
                 v = ctypes.cast(v, c_void_p).value if v is not None else 0
+            elif w.ctype is c_double:
+                # A top-level Float is passed by value; `to_lean` boxes it for
+                # nested (generic) positions only.
+                v = float(a)
             elif w.ctype in (c_uint8, ctypes.c_uint16) and not isinstance(v, int):
                 # Enum/Bool: `to_lean` produces a boxed scalar pointer so it
                 # round-trips through nested struct fields, but a top-level
@@ -289,6 +303,8 @@ def _build_callable(lib: ctypes.CDLL, finfo: FuncInfo, marshaller: Marshaller) -
         if return_is_pointer:
             result_ptr = ctypes.cast(c_void_p(result_raw), LObjPtr)
             return rwrap.from_lean(result_ptr)
+        if rwrap.ctype is c_double:
+            return float(result_raw)  # a top-level Float comes back by value
         return rwrap.from_lean(result_raw)
 
     _wrapper.__name__ = finfo.exportName
@@ -326,6 +342,11 @@ class LeanLibrary:
         lake_path = Path(lake_dir).resolve()
         if not lake_path.is_dir():
             raise FileNotFoundError(f"not a Lake project directory: {lake_path}")
+        # The runtime must be the project's toolchain, whatever the cwd: pin
+        # it unless the caller already has (`utils.set_toolchain`, the env).
+        if pinned_toolchain() is None and not os.environ.get(PREFIX_ENV):
+            if toolchain := toolchain_of(lake_path):
+                set_toolchain(toolchain)
         if build:
             run_command(["lake", "build"], cwd=lake_path)
 
@@ -417,6 +438,11 @@ class LeanLibrary:
         self.path = Path(dylib_path)
         self.name = library_name
         self.ffi = get_lean_ffi()
+        # Lean code that asks for its sysroot (`Lean.findSysroot`, e.g. the
+        # kernel's `init_search`) runs `lean --print-prefix` from the cwd
+        # unless LEAN_SYSROOT is set: point it at the runtime just loaded.
+        if bundle_dir() is None:
+            os.environ.setdefault("LEAN_SYSROOT", str(lean_prefix()))
         # Ensure the dylib can resolve its @rpath references to Lean's runtime.
         _ensure_rpath(self.path)
         # Use `PyDLL` so that ctypes does NOT release the GIL when calling

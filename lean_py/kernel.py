@@ -28,8 +28,9 @@ underlying ``LeanLibrary`` instance.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -65,6 +66,87 @@ class TacticResult:
         if status == "success" and raw_state is not None:
             state = GoalState(kernel, raw_state)
         return cls(status, messages, state)
+
+
+@dataclass(frozen=True)
+class Message:
+    """A Lean message: severity (``"error"``, ``"warning"``,
+    ``"information"``), its range in the processed source (1-based lines,
+    0-based columns) and its text."""
+
+    severity: str
+    line: int
+    column: int
+    end_line: int
+    end_column: int
+    text: str
+
+    @classmethod
+    def from_json(cls, d: dict) -> Message:
+        return cls(d["severity"], d["line"], d["column"], d["endLine"], d["endColumn"], d["text"])
+
+    def __str__(self) -> str:
+        return f"{self.line}:{self.column}: {self.severity}: {self.text}"
+
+
+@dataclass(frozen=True)
+class Command:
+    """One command of a processed source: the line it starts on, the
+    constants it added (names unescaped) and its messages."""
+
+    line: int
+    constants: list[str]
+    messages: list[Message]
+
+
+@dataclass(frozen=True)
+class ProcessResult:
+    """The result of :meth:`Kernel.elaborate`.
+
+    Attributes:
+        commands: each command's constants and messages, in order.
+        header: messages from parsing the source's header, if any.
+        error: why the source could not be processed at all (no environment
+            loaded, an imported module not loaded), else ``None``.
+    """
+
+    commands: list[Command] = field(default_factory=list)
+    header: list[Message] = field(default_factory=list)
+    error: str | None = None
+
+    @property
+    def messages(self) -> list[Message]:
+        """Every message, the header's first."""
+        return [*self.header, *(m for c in self.commands for m in c.messages)]
+
+    @property
+    def errors(self) -> list[Message]:
+        """The messages of severity ``"error"``."""
+        return [m for m in self.messages if m.severity == "error"]
+
+    @property
+    def constants(self) -> list[str]:
+        """Every constant the source added, in command order."""
+        return [n for c in self.commands for n in c.constants]
+
+    @property
+    def ok(self) -> bool:
+        """Processed, with no error message."""
+        return self.error is None and not self.errors
+
+    @classmethod
+    def from_json(cls, encoded: str) -> ProcessResult:
+        d = json.loads(encoded)
+        return cls(
+            [
+                Command(
+                    c["line"], list(c["constants"]), [Message.from_json(m) for m in c["messages"]]
+                )
+                for c in d["commands"]
+            ],
+            [Message.from_json(m) for m in d["header"]],
+            d["error"],
+        )
 
 
 class GoalState:
@@ -381,9 +463,27 @@ class Kernel:
     def process(self, source: str) -> str:
         """Process Lean source code against the current environment.
 
-        Returns a multi-line string of new constants per command, separated by
-        ``\\n---\\n``."""
+        Returns a multi-line string of new constants per command (names
+        unescaped), separated by ``\\n---\\n``, or ``<error: …>``. A header
+        (``module``, ``import …``) is skipped when its imports are loaded and
+        is an error otherwise. Messages are dropped: see :meth:`elaborate`."""
         return self._lib.leanpy_kernel_frontend_process(source)
+
+    def elaborate(self, source: str, *, inherit_env: bool = False) -> ProcessResult:
+        """Process Lean source code against the current environment, keeping
+        Lean's messages.
+
+        A header (``module``, ``prelude``, ``import …``) is skipped when every
+        module it imports is already loaded; otherwise ``error`` names the
+        missing modules and nothing is elaborated. With ``inherit_env=True``
+        the active environment becomes the one after the source, so later
+        calls (``elaborate``, ``decl_type``, ``decl_axioms``, ``goal_create``,
+        …) see its declarations. A declaration that fails to elaborate is
+        still added (with ``sorryAx``) and reported; check ``ok`` / ``errors``.
+        """
+        return ProcessResult.from_json(
+            self._lib.leanpy_kernel_frontend_process_json(source, inherit_env)
+        )
 
     def collect_sorrys(self, source: str) -> tuple[GoalState | None, str]:
         """Extract all `sorry` placeholders in ``source`` as a draftable
@@ -407,4 +507,4 @@ class Kernel:
         return self._lib.leanpy_kernel_delab_expr_proj_to_app(src)
 
 
-__all__ = ["Kernel", "GoalState", "TacticResult"]
+__all__ = ["Command", "GoalState", "Kernel", "Message", "ProcessResult", "TacticResult"]

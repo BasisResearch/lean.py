@@ -320,4 +320,9 @@ def powInt (base : Int) (exp : Int) : IO Int := do
   init ()
   (← Py.pow (← Py.ofInt64 base) (← Py.ofInt64 exp)).toInt
 
+/-- A top-level Float in and out, beside a Nat and an Array Float. -/
+@[python "py_float_affine"]
+def floatAffine (x : Float) (k : Nat) (ys : Array Float) : Float :=
+  x * k.toFloat + ys.foldl (· + ·) 0
+
 #export_python_registry "TestLib"
