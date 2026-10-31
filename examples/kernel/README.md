@@ -23,6 +23,27 @@ The bridge imports `LeanPy.Kernel` and `LeanPy.Export`. It does not import the
 `LeanPy` umbrella or request a Regex archive, although building the existing
 LeanPy static library still builds its Regex dependency.
 
+## Elaborating source against the project
+
+`Kernel.elaborate(source, inherit_env=False)` processes Lean commands against
+the loaded environment and returns a `ProcessResult`: per command the
+constants it added (names unescaped) and Lean's messages (`severity`, `line`,
+`column`, `end_line`, `end_column`, `text`), plus `ok`, `errors` and `error`.
+A header (`module`, `import …`) is skipped when its imports are loaded, and is
+an `error` naming the missing modules otherwise. With `inherit_env=True` the
+declarations persist: later `elaborate`, `decl_type`, `decl_axioms` and goal
+calls see them, so a translator can elaborate and check one fragment at a time.
+
+```python
+r = kernel.elaborate("def x : Nat := 1", inherit_env=True)
+assert r.ok, "\n".join(map(str, r.errors))
+print(kernel.decl_type("x"))
+```
+
+The runtime is the toolchain of the project `LeanLibrary.from_lake` loads,
+whatever the current directory; `LEANPY_TOOLCHAIN`, `LEANPY_LEAN_PREFIX` or
+`lean_py.utils.set_toolchain` override it.
+
 ## Temporary dependency workaround
 
 Regex `v4.34.0-rc1` triggers a Lean 4.35 `grind` panic in

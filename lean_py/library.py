@@ -34,7 +34,15 @@ from lean_py.base_types import LeanObject
 from lean_py.lean_ffi import get_lean_ffi
 from lean_py.marshal import LeanInductiveValue, Marshaller, TypeWrapper, _CtorMeta
 from lean_py.registry import FuncInfo, LibraryRegistry, TypeInfo
-from lean_py.utils import lean_lib_dir, run_command, shared_lib_extension
+from lean_py.utils import (
+    PREFIX_ENV,
+    lean_lib_dir,
+    pinned_toolchain,
+    run_command,
+    set_toolchain,
+    shared_lib_extension,
+    toolchain_of,
+)
 
 
 def _list_init_symbols(dylib: Path) -> list[str]:
@@ -326,6 +334,11 @@ class LeanLibrary:
         lake_path = Path(lake_dir).resolve()
         if not lake_path.is_dir():
             raise FileNotFoundError(f"not a Lake project directory: {lake_path}")
+        # The runtime must be the project's toolchain, whatever the cwd: pin
+        # it unless the caller already has (`utils.set_toolchain`, the env).
+        if pinned_toolchain() is None and not os.environ.get(PREFIX_ENV):
+            if toolchain := toolchain_of(lake_path):
+                set_toolchain(toolchain)
         if build:
             run_command(["lake", "build"], cwd=lake_path)
 

@@ -107,7 +107,7 @@ def allDecls (_ : Unit) : IO String := do
   match (← envRef.get) with
   | some env =>
     let r ← IO.mkRef (#[] : Array String)
-    env.constants.forM (fun n _ => do r.modify (·.push (toString n)))
+    env.constants.forM (fun n _ => do r.modify (·.push (n.toString (escape := false))))
     let acc ← r.get
     return "\n".intercalate acc.qsort.toList
   | none => return ""
@@ -117,7 +117,7 @@ def catalogPy (_ : Unit) : IO String := do
   match (← envRef.get) with
   | some env =>
     let names := envCatalog env
-    let strs := names.map toString
+    let strs := names.map (·.toString (escape := false))
     return "\n".intercalate strs.qsort.toList
   | none => return ""
 
@@ -127,7 +127,7 @@ def search (needle : String) : IO String := do
   | some env =>
     let r ← IO.mkRef (#[] : Array String)
     env.constants.forM fun n _ => do
-      let s := toString n
+      let s := n.toString (escape := false)
       if needle.isEmpty || ((s.splitOn needle).length > 1) then
         r.modify (·.push s)
     let acc ← r.get
@@ -163,7 +163,7 @@ def moduleOfNameStr (name : String) : IO String := do
   match (← envRef.get) with
   | some env =>
     match module_of_name env name.toName with
-    | some n => return toString n
+    | some n => return n.toString (escape := false)
     | none   => return ""
   | none => return ""
 
@@ -178,7 +178,7 @@ def declAxioms (name : String) : IO String := runCore do
   if env.find? n |>.isNone then
     return ""
   let axioms ← collectAxioms n
-  let names := axioms.map toString |>.qsort
+  let names := axioms.map (·.toString (escape := false)) |>.qsort
   return "\n".intercalate names.toList
 
 /-! ## Elaboration -/
@@ -660,22 +660,94 @@ def frontendFindSourcePath (moduleName : String) : IO String := do
     return p.toString
   catch e => return s!"<error: {e.toString}>"
 
+/-- Set up the frontend for `source` against `env`. A header (`module`,
+`prelude`, `import …`) is skipped when every module it imports is already in
+`env`; otherwise this throws, naming the missing modules. (Before, the header
+was parsed as commands, failed, and the error was dropped: empty output.) -/
+def frontendContextState (env : Environment) (source : String) (fileName : String) :
+    IO (Elab.Frontend.Context × Elab.Frontend.State × MessageLog) := do
+  let inputCtx := Parser.mkInputContext source fileName
+  let (header, parserState, headerMsgs) ← Parser.parseHeader inputCtx
+  let hstx : Elab.HeaderSyntax := header
+  let missing := (hstx.imports (includeInit := false)).filter
+    fun i => (env.getModuleIdx? i.module).isNone
+  unless missing.isEmpty do
+    let ms := missing.toList.map (·.module.toString (escape := false))
+    throw <| IO.userError s!"the source imports modules not in the loaded environment: {", ".intercalate ms}; load them first (Kernel.load)"
+  let commandState := Elab.Command.mkState env {} {}
+  let ctx : Elab.Frontend.Context := { inputCtx }
+  let st : Elab.Frontend.State := {
+    commandState := { commandState with infoState.enabled := true },
+    parserState,
+    cmdPos := parserState.pos }
+  return (ctx, st, headerMsgs)
+
+/-- Run `f` on each command of `source` against `env`: its results and the
+environment after the last command. -/
+def frontendRun (env : Environment) (source : String) (fileName : String)
+    (f : Pantograph.Frontend.CompilationStep → IO α) :
+    IO (List α × Environment × MessageLog) := do
+  let (ctx, st, headerMsgs) ← frontendContextState env source fileName
+  let m : Pantograph.Frontend.FrontendM (List α) :=
+    Pantograph.Frontend.mapCompilationSteps fun step => do f step
+  let (results, st') ← (m.run {} |>.run ctx |>.run st)
+  return (results, st'.commandState.env, headerMsgs)
+
 /-- Process a single Lean source string against the current environment.
-Returns a newline-separated list of constants defined per command. -/
+Returns a newline-separated list of constants defined per command (names
+unescaped), commands separated by `\n---\n`; `<error: …>` on failure. -/
 @[python "leanpy_kernel_frontend_process"]
 def frontendProcess (source : String) : IO String := do
   match (← envRef.get) with
   | none => return "no environment loaded"
   | some env =>
     try
-      let (fctx, fstate) ← Pantograph.Frontend.createContextStateFromFile source "<process>" (env? := some env) {}
-      let m : Pantograph.Frontend.FrontendM (List String) :=
-        Pantograph.Frontend.mapCompilationSteps fun step => do
-          let names ← step.newConstants
-          return "\n".intercalate (names.toList.map toString)
-      let (steps, _) ← (m.run {} |>.run fctx |>.run fstate)
+      let (steps, _, _) ← frontendRun env source "<process>" fun step => do
+        let names ← step.newConstants
+        return "\n".intercalate (names.toList.map (·.toString (escape := false)))
       return "\n---\n".intercalate steps
     catch e => return s!"<error: {e.toString}>"
+
+/-- A message as JSON: severity, its range (1-based lines, 0-based columns,
+in the processed source) and its text. -/
+def messageJson (m : Message) : IO Json := do
+  let severity := match m.severity with
+    | .error => "error" | .warning => "warning" | .information => "information"
+  let endPos := m.endPos.getD m.pos
+  return Json.mkObj [
+    ("severity", severity), ("line", m.pos.line), ("column", m.pos.column),
+    ("endLine", endPos.line), ("endColumn", endPos.column),
+    ("text", ← m.data.toString)]
+
+/-- Process `source` against the current environment, returning JSON:
+`{"error", "header": [messages], "commands": [{"line", "constants",
+"messages"}]}`, `error` null unless the source could not be processed (no
+environment, an import not loaded); elaboration errors are messages. With `inheritEnv`, the active environment becomes the one
+after the source, so later calls (`process`, `decl_type`, `decl_axioms`,
+`goal_create`, …) see its declarations; on an exception it is unchanged. -/
+@[python "leanpy_kernel_frontend_process_json"]
+def frontendProcessJson (source : String) (inheritEnv : Bool) : IO String := do
+  match (← envRef.get) with
+  | none =>
+    return (Json.mkObj [("error", "no environment loaded"),
+      ("header", Json.arr #[]), ("commands", Json.arr #[])]).compress
+  | some env =>
+    try
+      let (cmds, env', headerMsgs) ← frontendRun env source "<process>" fun step => do
+        let names ← step.newConstants
+        let msgs ← step.msgs.mapM messageJson
+        let line := (step.fileMap.toPosition (step.stx.getPos?.getD 0)).line
+        return Json.mkObj [
+          ("line", line),
+          ("constants", toJson ((names.toList.map (·.toString (escape := false))).toArray.qsort (· < ·))),
+          ("messages", Json.arr msgs.toArray)]
+      let header ← headerMsgs.toList.mapM messageJson
+      if inheritEnv then envRef.set (some env')
+      return (Json.mkObj [("error", Json.null),
+        ("header", Json.arr header.toArray), ("commands", Json.arr cmds.toArray)]).compress
+    catch e =>
+      return (Json.mkObj [("error", e.toString),
+        ("header", Json.arr #[]), ("commands", Json.arr #[])]).compress
 
 /-- Collect all `sorry` positions in the source as a draftable goal state.
 Returns the goal state pretty-printed (for now). -/
@@ -685,7 +757,7 @@ def frontendCollectSorrys (source : String) : IO (Option GoalState × String) :=
   | none => return (none, "no environment loaded")
   | some env =>
     try
-      let (fctx, fstate) ← Pantograph.Frontend.createContextStateFromFile source "<collect_sorrys>" (env? := some env) {}
+      let (fctx, fstate, _) ← frontendContextState env source "<collect_sorrys>"
       let m : Pantograph.Frontend.FrontendM (List Pantograph.Frontend.InfoWithContext) := do
         let xss ← Pantograph.Frontend.mapCompilationSteps fun step => Pantograph.Frontend.collectSorrys step
         return xss.flatten

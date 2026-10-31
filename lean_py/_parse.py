@@ -70,7 +70,7 @@ def find_lean_header() -> Path:
     """Locate lean.h via the active Lean toolchain.
 
     Strategy:
-      1. Ask `lean --print-prefix` for the toolchain sysroot, look for
+      1. Ask `utils.lean_prefix` for the toolchain sysroot, look for
          `<prefix>/include/lean/lean.h`. This is the canonical location
          and works regardless of whether elan, lakefile, or a manual
          install picked the toolchain.
@@ -87,11 +87,12 @@ def find_lean_header() -> Path:
                 return cand
 
     try:
-        prefix = subprocess.check_output(["lean", "--print-prefix"], text=True).strip()
-        header = Path(prefix) / "include" / "lean" / "lean.h"
+        from lean_py.utils import lean_include_dir  # independent of the cwd
+
+        header = lean_include_dir() / "lean" / "lean.h"
         if header.exists():
             return header
-    except (FileNotFoundError, subprocess.CalledProcessError):
+    except (FileNotFoundError, RuntimeError):
         pass
 
     toolchain_file = Path(__file__).parent.parent / "lean-toolchain"
