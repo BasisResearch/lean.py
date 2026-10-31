@@ -25,7 +25,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable
-from ctypes import POINTER, c_uint8, c_void_p
+from ctypes import POINTER, c_double, c_uint8, c_void_p
 from pathlib import Path
 from typing import Any
 
@@ -287,6 +287,10 @@ def _build_callable(lib: ctypes.CDLL, finfo: FuncInfo, marshaller: Marshaller) -
             if isinstance(w.ctype, type) and issubclass(w.ctype, ctypes._Pointer):
                 # Convert pointer args to raw pointer values to match cfn.argtypes.
                 v = ctypes.cast(v, c_void_p).value if v is not None else 0
+            elif w.ctype is c_double:
+                # A top-level Float is passed by value; `to_lean` boxes it for
+                # nested (generic) positions only.
+                v = float(a)
             elif w.ctype in (c_uint8, ctypes.c_uint16) and not isinstance(v, int):
                 # Enum/Bool: `to_lean` produces a boxed scalar pointer so it
                 # round-trips through nested struct fields, but a top-level
@@ -299,6 +303,8 @@ def _build_callable(lib: ctypes.CDLL, finfo: FuncInfo, marshaller: Marshaller) -
         if return_is_pointer:
             result_ptr = ctypes.cast(c_void_p(result_raw), LObjPtr)
             return rwrap.from_lean(result_ptr)
+        if rwrap.ctype is c_double:
+            return float(result_raw)  # a top-level Float comes back by value
         return rwrap.from_lean(result_raw)
 
     _wrapper.__name__ = finfo.exportName
